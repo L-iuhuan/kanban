@@ -378,8 +378,13 @@ async function refreshStatus() {
     }
     if (s.env_ok) {
       appendLog("ok", "运行环境就绪: " + s.python);
+    } else if (s.synced) {
+      appendLog("warn", "运行环境未就绪,正在自动安装(首次需要几分钟,请耐心等待)…");
+      void invoke("setup_env").catch((e) => {
+        appendLog("error", "环境安装启动失败: " + e);
+      });
     } else {
-      appendLog("warn", "运行环境未就绪,首次运行前需要安装(见设置/自动安装)");
+      appendLog("warn", "运行环境未就绪,同步代码后将自动安装");
     }
     return s;
   } catch (e) {
