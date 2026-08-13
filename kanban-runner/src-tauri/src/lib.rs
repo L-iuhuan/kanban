@@ -8,8 +8,13 @@ use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// 当前运行中的任务 pid
-#[derive(Default)]
 struct Running(Arc<Mutex<Option<u32>>>);
+
+impl Default for Running {
+    fn default() -> Self {
+        Running(Arc::new(Mutex::new(None)))
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct AppConfig {
