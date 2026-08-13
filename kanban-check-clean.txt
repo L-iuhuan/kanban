@@ -1,0 +1,8 @@
+﻿cargo.exe :     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.41s
+At line:11 char:3
++   & "$tb\cargo.exe" check 2> "D:\Files\projects\架构测试\kanban-check-err ...
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Finished `d...get(s) in 0.41s:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+

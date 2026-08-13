@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 
 /// 当前运行中的任务 pid
 struct Running(Arc<Mutex<Option<u32>>>);
@@ -87,7 +87,7 @@ fn load_config() -> AppConfig {
         .unwrap_or_default()
 }
 
-fn save_config(cfg: &AppConfig) -> Result<(), String> {
+fn write_config(cfg: &AppConfig) -> Result<(), String> {
     let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
     fs::write(config_path(), json).map_err(|e| e.to_string())
 }
@@ -114,7 +114,7 @@ async fn get_config() -> Result<AppConfig, String> {
 
 #[tauri::command]
 async fn save_config(cfg: AppConfig) -> Result<(), String> {
-    save_config(&cfg)
+    write_config(&cfg)
 }
 
 // ── 状态 ──────────────────────────────────────────────
@@ -290,7 +290,7 @@ async fn run_pipeline(
         let start = Instant::now();
         let status = child.wait();
         let ok = status.as_ref().map(|s| s.success()).unwrap_or(false);
-        let code = status.as_ref().and_then(|s| s.code());
+        let code = status.as_ref().ok().and_then(|s| s.code());
         *running.lock().unwrap() = None;
         let _ = app3.emit(
             "pipeline-done",
@@ -416,7 +416,7 @@ async fn setup_env(app: AppHandle) -> Result<bool, String> {
     if !venv.exists() {
         emit_log(&app, "info", "创建虚拟环境 .venv ...".into());
         let out = Command::new(&system_python)
-            .args(["-m", "venv", ".venv"])
+            .args(["-m", "venv", "--system-site-packages", ".venv"])
             .current_dir(&root)
             .output()
             .map_err(|e| format!("创建 venv 失败: {e}"))?;
@@ -488,12 +488,12 @@ fn find_system_python() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("PYTHON_EXE") {
         candidates.push(PathBuf::from(p));
     }
-    candidates.push(PathBuf::from("C:\Software\Anaconda3\python.exe"));
-    candidates.push(PathBuf::from("C:\ProgramData\Anaconda3\python.exe"));
-    candidates.push(PathBuf::from("C:\Python313\python.exe"));
-    candidates.push(PathBuf::from("C:\Python312\python.exe"));
-    candidates.push(PathBuf::from("C:\Python311\python.exe"));
-    candidates.push(PathBuf::from("C:\Python310\python.exe"));
+    candidates.push(PathBuf::from(r"C:\Software\Anaconda3\python.exe"));
+    candidates.push(PathBuf::from(r"C:\ProgramData\Anaconda3\python.exe"));
+    candidates.push(PathBuf::from(r"C:\Python313\python.exe"));
+    candidates.push(PathBuf::from(r"C:\Python312\python.exe"));
+    candidates.push(PathBuf::from(r"C:\Python311\python.exe"));
+    candidates.push(PathBuf::from(r"C:\Python310\python.exe"));
     if let Ok(home) = std::env::var("LOCALAPPDATA") {
         for ver in ["Python313", "Python312", "Python311", "Python310"] {
             candidates.push(PathBuf::from(&home).join("Programs").join("Python").join(ver).join("python.exe"));
