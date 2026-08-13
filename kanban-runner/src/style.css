@@ -1,0 +1,520 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --bg: #0b0d18;
+  --card: rgba(255, 255, 255, 0.04);
+  --card-border: rgba(255, 255, 255, 0.09);
+  --text: #e9ebf4;
+  --text-dim: #9aa0b8;
+  --accent: #7b6cff;
+  --accent-2: #38c8ff;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --err: #f87171;
+  --mono: "Cascadia Code", Consolas, "Courier New", monospace;
+}
+
+html,
+body {
+  height: 100%;
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+  user-select: none;
+}
+
+body {
+  background:
+    radial-gradient(640px 420px at 10% -12%, rgba(123, 108, 255, 0.22), transparent 62%),
+    radial-gradient(760px 520px at 106% 16%, rgba(56, 200, 255, 0.13), transparent 62%),
+    radial-gradient(900px 640px at 50% 120%, rgba(255, 90, 170, 0.09), transparent 62%),
+    var(--bg);
+}
+
+/* ── 标题栏 ─────────────────────────────── */
+.titlebar {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--card-border);
+  background: rgba(11, 13, 24, 0.6);
+  backdrop-filter: blur(10px);
+}
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.logo {
+  font-size: 16px;
+}
+.app-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+.badge {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent-2);
+  background: rgba(56, 200, 255, 0.1);
+  border: 1px solid rgba(56, 200, 255, 0.25);
+  border-radius: 10px;
+  padding: 2px 8px;
+}
+.status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.status .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.status.ok .dot {
+  background: var(--ok);
+  box-shadow: 0 0 6px var(--ok);
+}
+.status.bad .dot {
+  background: var(--err);
+}
+.titlebar-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.tb-btn {
+  width: 32px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.tb-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text);
+}
+.tb-close:hover {
+  background: #e81123;
+  color: #fff;
+}
+.win-controls {
+  display: flex;
+  gap: 2px;
+  margin-left: 4px;
+}
+
+/* ── 主体 ───────────────────────────────── */
+.content {
+  height: calc(100% - 44px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px 10px;
+  overflow: hidden;
+}
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(248, 113, 113, 0.1);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: 10px;
+  padding: 9px 14px;
+  font-size: 13px;
+  color: #fecaca;
+}
+.banner-icon {
+  font-size: 15px;
+}
+#banner-text {
+  flex: 1;
+  word-break: break-all;
+  max-height: 54px;
+  overflow-y: auto;
+}
+.banner-btn {
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.15);
+  color: #fecaca;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.banner-btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  font-size: 15px;
+  padding: 2px 6px;
+}
+
+/* ── 上半区 ─────────────────────────────── */
+.top-row {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 12px;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 14px;
+  padding: 16px;
+  backdrop-filter: blur(14px);
+}
+
+/* 拖拽区 */
+.drop-card {
+  display: flex;
+  align-items: stretch;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.drop-card.dragover {
+  border-color: var(--accent);
+  background: rgba(123, 108, 255, 0.08);
+  box-shadow: 0 0 0 3px rgba(123, 108, 255, 0.15) inset;
+}
+.drop-inner {
+  flex: 1;
+  border: 1.5px dashed rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 12px;
+  text-align: center;
+}
+.drop-icon {
+  font-size: 28px;
+}
+.drop-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.drop-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.drop-file {
+  font-size: 12px;
+  color: var(--accent-2);
+  background: rgba(56, 200, 255, 0.08);
+  border-radius: 6px;
+  padding: 4px 10px;
+  max-width: 100%;
+  word-break: break-all;
+}
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  margin-top: 4px;
+}
+.checkbox-row input {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+}
+
+/* 阶段卡片 */
+.stage-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.stepper {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-bottom: 14px;
+}
+.stepper li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.s-idx {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  flex-shrink: 0;
+  transition: all 0.2s;
+}
+.stepper li.active {
+  color: var(--text);
+}
+.stepper li.active .s-idx {
+  border-color: var(--accent);
+  background: rgba(123, 108, 255, 0.2);
+  color: #fff;
+  box-shadow: 0 0 8px rgba(123, 108, 255, 0.5);
+}
+.stepper li.done {
+  color: var(--ok);
+}
+.stepper li.done .s-idx {
+  border-color: var(--ok);
+  background: rgba(52, 211, 153, 0.15);
+}
+.stepper li.failed {
+  color: var(--err);
+}
+.stepper li.failed .s-idx {
+  border-color: var(--err);
+  background: rgba(248, 113, 113, 0.15);
+}
+.progress {
+  height: 8px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+.stage-detail {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  min-height: 16px;
+}
+
+/* ── 日志 ───────────────────────────────── */
+.log-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 12px 14px;
+}
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.log-actions {
+  display: flex;
+  gap: 6px;
+}
+.mini-btn {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.mini-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+}
+.log-body {
+  flex: 1;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.65;
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 9px;
+  padding: 9px 11px;
+  min-height: 0;
+}
+.log-empty {
+  color: rgba(255, 255, 255, 0.25);
+}
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.log-line .ts {
+  color: rgba(255, 255, 255, 0.3);
+  margin-right: 8px;
+}
+.log-line.info {
+  color: #c6cbd9;
+}
+.log-line.ok {
+  color: var(--ok);
+}
+.log-line.warn {
+  color: var(--warn);
+}
+.log-line.error {
+  color: var(--err);
+  background: rgba(248, 113, 113, 0.07);
+  border-radius: 4px;
+}
+.log-line.stage {
+  color: var(--accent-2);
+  font-weight: 600;
+}
+
+/* ── 底部操作 ───────────────────────────── */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.btn {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+  border: 1px solid var(--card-border);
+  border-radius: 9px;
+  padding: 8px 15px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.05s;
+}
+.btn:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btn.primary {
+  background: linear-gradient(135deg, var(--accent), #5745d8);
+  border: none;
+  color: #fff;
+  font-weight: 600;
+}
+.btn.danger {
+  background: rgba(248, 113, 113, 0.14);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  color: var(--err);
+}
+.btn.ghost {
+  background: transparent;
+}
+.btn.big {
+  padding: 10px 22px;
+  font-size: 14px;
+}
+.actions-sep {
+  width: 1px;
+  height: 22px;
+  background: var(--card-border);
+  margin: 0 4px;
+}
+.folder-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.folder-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.footer {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.28);
+  text-align: center;
+}
+
+/* ── 设置弹层 ───────────────────────────── */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.modal {
+  width: 460px;
+  background: #141727;
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  padding: 22px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+.modal h3 {
+  font-size: 16px;
+  margin-bottom: 16px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.field input {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+  font-family: var(--mono);
+}
+.field input:focus {
+  border-color: var(--accent);
+}
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

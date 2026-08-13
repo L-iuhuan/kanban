@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tauri Demo</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div class="titlebar" data-tauri-drag-region>
+      <div class="titlebar-brand">
+        <span class="logo">🦀</span>
+        <span class="app-title">Tauri Demo</span>
+      </div>
+      <div class="titlebar-controls">
+        <button id="btn-min" class="tb-btn" title="最小化">&#x2013;</button>
+        <button id="btn-max" class="tb-btn" title="最大化/还原">&#x25A1;</button>
+        <button id="btn-close" class="tb-btn tb-close" title="关闭">&#x2715;</button>
+      </div>
+    </div>
+
+    <main class="content">
+      <header class="hero">
+        <h1>你好,Vibe Coder 👋</h1>
+        <p>这是一个 Tauri 2 桌面应用 demo:前端 Vite + TypeScript,后端 Rust,WebView2 渲染。</p>
+      </header>
+
+      <section class="grid">
+        <div class="card">
+          <h2>⚡ Rust 命令调用</h2>
+          <p class="hint">前端 invoke() → Rust #[tauri::command] → 返回值</p>
+          <div class="row">
+            <input id="name-input" type="text" placeholder="输入你的名字" />
+            <button id="btn-greet" class="btn">打招呼</button>
+          </div>
+          <p id="greet-output" class="output"></p>
+        </div>
+
+        <div class="card">
+          <h2>🖥️ 系统信息</h2>
+          <p class="hint">由 Rust sysinfo 采集,展示原生能力</p>
+          <dl id="sysinfo" class="kv">
+            <div><dt>操作系统</dt><dd id="si-os">—</dd></div>
+            <div><dt>架构</dt><dd id="si-arch">—</dd></div>
+            <div><dt>CPU 逻辑核心</dt><dd id="si-cpu">—</dd></div>
+            <div><dt>总内存</dt><dd id="si-ram">—</dd></div>
+            <div><dt>主机名</dt><dd id="si-host">—</dd></div>
+          </dl>
+          <button id="btn-refresh" class="btn ghost">刷新</button>
+        </div>
+
+        <div class="card">
+          <h2>📂 文件对话框</h2>
+          <p class="hint">原生系统文件选择器(plugin-dialog)</p>
+          <button id="btn-pick" class="btn">选择文件</button>
+          <p id="file-output" class="output"></p>
+        </div>
+
+        <div class="card">
+          <h2>🔔 系统通知</h2>
+          <p class="hint">原生桌面通知(plugin-notification)</p>
+          <button id="btn-notify" class="btn">发送通知</button>
+          <p id="notify-output" class="output"></p>
+        </div>
+
+        <div class="card wide">
+          <h2>📋 剪贴板</h2>
+          <p class="hint">读写系统剪贴板(plugin-clipboard-manager)</p>
+          <div class="row">
+            <input id="clip-input" type="text" placeholder="要写入剪贴板的文本" />
+            <button id="btn-clip-write" class="btn">写入</button>
+            <button id="btn-clip-read" class="btn ghost">读取</button>
+          </div>
+          <p id="clip-output" class="output"></p>
+        </div>
+      </section>
+
+      <footer id="footer" class="footer">loading…</footer>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

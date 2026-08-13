@@ -1,0 +1,31 @@
+# ── 本地环境与工具链(体积大,勿提交) ──
+.rust-toolchain/
+.cargo-home/
+.rust-dist/
+.npm-cache/
+.tauri-cache/
+.venv/
+venv/
+
+# ── 构建产物 ──
+node_modules/
+target/
+dist/
+dist-electron/
+release/
+
+# ── 运行时数据(kanban-runner) ──
+code/
+config.json
+output/
+data/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ── 编辑器与系统 ──
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+*.log
