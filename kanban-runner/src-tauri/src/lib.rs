@@ -3,6 +3,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, State};
@@ -15,6 +16,18 @@ impl Default for Running {
         Running(Arc::new(Mutex::new(None)))
     }
 }
+
+/// 用户主动停止标记：wait 线程据此区分「正常结束 / 失败 / 被用户停止」
+struct Cancelled(Arc<AtomicBool>);
+
+impl Default for Cancelled {
+    fn default() -> Self {
+        Cancelled(Arc::new(AtomicBool::new(false)))
+    }
+}
+
+/// 预置共享盘路径：部署前改为实际 UNC 路径；config.json 仅用于覆盖
+const DEFAULT_SHARE_PATH: &str = r"\\192.168.8.3\财务部\办公软件\SoftwareUpdate\数据分析看板";
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct AppConfig {
@@ -39,13 +52,22 @@ struct SyncResult {
 
 #[derive(Serialize, Clone)]
 struct Status {
+    /// 共享盘 code 目录存在(可同步)
     share_ok: bool,
+    /// 共享盘本身可达(但可能还没有代码)
+    share_reachable: bool,
     env_ok: bool,
     synced: bool,
     version: String,
     share_path: String,
     app_root: String,
     python: String,
+    /// 共享盘 app/app-version.txt 中有更新版本的运行器(壳子更新提示)
+    update_available: Option<String>,
+    /// 当前运行器自身版本(编译期来自 Cargo.toml)
+    app_version: String,
+    /// 共享盘 code/version.txt 的内容(检测运行期间开发者是否推送了新代码)
+    remote_version: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -69,6 +91,13 @@ struct DoneEvent {
     error: Option<String>,
 }
 
+#[derive(Serialize, Clone)]
+struct HealthResult {
+    ok: bool,
+    python: String,
+    message: String,
+}
+
 fn app_root() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -76,15 +105,38 @@ fn app_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// 所有可写数据（config.json / .venv / code / 产物）的统一根目录：%LOCALAPPDATA%\KanbanRunner
+/// 避免安装到 Program Files 后非管理员写失败
+fn data_root() -> PathBuf {
+    let base = std::env::var("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| app_root().to_path_buf());
+    let dir = base.join("KanbanRunner");
+    let _ = fs::create_dir_all(&dir);
+    dir
+}
+
 fn config_path() -> PathBuf {
-    app_root().join("config.json")
+    data_root().join("config.json")
 }
 
 fn load_config() -> AppConfig {
     fs::read_to_string(config_path())
         .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+        // 容错 BOM：用户用记事本/PS 手改 config.json 可能带 BOM 头，直接解析会失败
+        .and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok())
+        .map(|mut c: AppConfig| {
+            // config.json 仅用于覆盖：share_path 为空时仍用预置默认值（零配置目标）
+            if c.share_path.trim().is_empty() {
+                c.share_path = DEFAULT_SHARE_PATH.into();
+            }
+            c
+        })
+        // 文件缺失或解析失败：显式构造，保证 share_path 不为空串
+        .unwrap_or(AppConfig {
+            share_path: DEFAULT_SHARE_PATH.into(),
+            auto_sync: true,
+        })
 }
 
 fn write_config(cfg: &AppConfig) -> Result<(), String> {
@@ -93,7 +145,7 @@ fn write_config(cfg: &AppConfig) -> Result<(), String> {
 }
 
 fn venv_python() -> PathBuf {
-    app_root().join(".venv").join("Scripts").join("python.exe")
+    data_root().join(".venv").join("Scripts").join("python.exe")
 }
 
 fn emit_log(app: &AppHandle, level: &str, text: String) {
@@ -104,6 +156,17 @@ fn emit_log(app: &AppHandle, level: &str, text: String) {
             text,
         },
     );
+}
+
+/// Windows 下禁止子进程弹出控制台窗口 (CREATE_NO_WINDOW = 0x08000000)
+fn no_window(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
 }
 
 // ── 配置 ──────────────────────────────────────────────
@@ -122,23 +185,82 @@ async fn save_config(cfg: AppConfig) -> Result<(), String> {
 async fn get_status() -> Result<Status, String> {
     let cfg = load_config();
     let share_root = Path::new(cfg.share_path.trim());
-    let share_ok = !cfg.share_path.trim().is_empty() && share_root.join("code").exists();
+    let share_reachable = !cfg.share_path.trim().is_empty() && share_root.exists();
+    let share_ok = share_reachable && share_root.join("code").exists();
     let env_ok = venv_python().exists();
-    let code_dir = app_root().join("code");
+    let code_dir = data_root().join("code");
     let synced = code_dir.join("run_chain.py").exists();
     let version = fs::read_to_string(code_dir.join("version.txt"))
         .unwrap_or_else(|_| "未同步".into())
         .trim()
         .to_string();
+    // 共享盘不可达时跳过更新检查,避免 UNC 读取触发 SMB 超时(可达数十秒)卡住启动
+    let update_available = if share_reachable {
+        check_app_update(cfg.share_path.trim())
+    } else {
+        None
+    };
+    // 共享盘上代码的版本(检测运行期间开发者是否推送了新代码)
+    let remote_version = if share_ok {
+        fs::read_to_string(share_root.join("code").join("version.txt"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    } else {
+        None
+    };
     Ok(Status {
         share_ok,
+        share_reachable,
         env_ok,
         synced,
         version,
         share_path: cfg.share_path,
-        app_root: app_root().display().to_string(),
+        // 字段名保留（前端兼容），值改为数据根目录
+        app_root: data_root().display().to_string(),
         python: venv_python().display().to_string(),
+        update_available,
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        remote_version,
     })
+}
+
+/// 检查共享盘 app/app-version.txt 是否有更新版本的运行器(壳子更新通道)
+fn check_app_update(share_path: &str) -> Option<String> {
+    if share_path.is_empty() {
+        return None;
+    }
+    let p = Path::new(share_path).join("app").join("app-version.txt");
+    let remote = fs::read_to_string(p).ok()?.trim().to_string();
+    if remote.is_empty() {
+        return None;
+    }
+    let current = env!("CARGO_PKG_VERSION");
+    if version_newer(&remote, current) {
+        Some(remote)
+    } else {
+        None
+    }
+}
+
+/// 朴素 semver 比较:remote 是否比 current 新(按 . 分段数值比较,允许 v 前缀)
+fn version_newer(remote: &str, current: &str) -> bool {
+    fn parts(s: &str) -> Vec<u32> {
+        s.trim_start_matches('v')
+            .split('.')
+            .map(|p| p.parse().unwrap_or(0))
+            .collect()
+    }
+    let r = parts(remote);
+    let c = parts(current);
+    for i in 0..r.len().max(c.len()) {
+        let rv = r.get(i).copied().unwrap_or(0);
+        let cv = c.get(i).copied().unwrap_or(0);
+        if rv != cv {
+            return rv > cv;
+        }
+    }
+    false
 }
 
 // ── 代码同步 ──────────────────────────────────────────
@@ -152,39 +274,41 @@ async fn sync_code(app: AppHandle) -> Result<SyncResult, String> {
     if !src.exists() {
         return Err(format!("共享盘代码目录不存在: {}", src.display()));
     }
-    let dst = app_root().join("code");
+    let dst = data_root().join("code");
     fs::create_dir_all(&dst).map_err(|e| e.to_string())?;
     emit_log(&app, "info", format!("开始同步代码: {}", src.display()));
 
-    let out = Command::new("robocopy")
-        .arg(&src)
-        .arg(&dst)
-        .args([
-            "/MIR",
-            "/XD",
-            ".git",
-            "output",
-            "data",
-            "__pycache__",
-            ".venv",
-            ".pytest_cache",
-        ])
-        .args(["/XF", "*.pyc", "*.log", "~$*"])
-        .args(["/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NP", "/MT:8"])
-        .output()
-        .map_err(|e| format!("无法执行 robocopy: {e}"))?;
+    // robocopy 可能耗时较长，放进 blocking 线程，避免阻塞 async worker
+    let src_c = src.clone();
+    let dst_c = dst.clone();
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        let mut cmd = Command::new("robocopy");
+        cmd.arg(&src_c)
+            .arg(&dst_c)
+            .args([
+                "/MIR",
+                "/XD",
+                ".git",
+                "output",
+                "data",
+                "__pycache__",
+                ".venv",
+                ".pytest_cache",
+            ])
+            .args(["/XF", "*.pyc", "*.log", "~$*"])
+            .args(["/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NP", "/MT:8"]);
+        no_window(&mut cmd);
+        cmd.output()
+    })
+    .await
+    .map_err(|e| format!("robocopy 任务异常: {e}"))?
+    .map_err(|e| format!("无法执行 robocopy: {e}"))?;
 
     let code = out.status.code().unwrap_or(-1);
     let ok = (0..=7).contains(&code);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    for line in stdout.lines() {
-        let t = line.trim();
-        if !t.is_empty() {
-            emit_log(&app, if ok { "info" } else { "error" }, t.to_string());
-        }
-    }
 
-    let version = fs::read_to_string(src.join("version.txt"))
+    // 从本地读取版本号（离线时也能显示，不再依赖共享盘）
+    let version = fs::read_to_string(dst.join("version.txt"))
         .unwrap_or_else(|_| "未知".into())
         .trim()
         .to_string();
@@ -211,6 +335,7 @@ async fn sync_code(app: AppHandle) -> Result<SyncResult, String> {
 async fn run_pipeline(
     app: AppHandle,
     state: State<'_, Running>,
+    cancelled: State<'_, Cancelled>,
     data_path: String,
     skip_processing: bool,
 ) -> Result<u32, String> {
@@ -218,87 +343,122 @@ async fn run_pipeline(
     if !python.exists() {
         return Err("运行环境未就绪(缺少 .venv),请先执行环境安装".into());
     }
-    let code_dir = app_root().join("code");
+    let code_dir = data_root().join("code");
     if !code_dir.join("run_chain.py").exists() {
         return Err("本地还没有代码,请先同步".into());
     }
     if !skip_processing && data_path.trim().is_empty() {
         return Err("请先选择要处理的 Excel 文件,或勾选「跳过数据处理」".into());
     }
-    {
-        let g = state.0.lock().unwrap();
+    // 依赖健康检查（拿锁之前）
+    check_deps(&python)?;
+    // Excel 文件锁检查（拿锁之前）：以写方式打开失败说明正被占用
+    if !skip_processing && !data_path.trim().is_empty() {
+        if fs::OpenOptions::new().write(true).open(data_path.trim()).is_err() {
+            return Err("数据文件被占用(可能正在 Excel 中打开),请关闭后重试".into());
+        }
+    }
+    // 每次启动重置用户停止标记
+    cancelled.0.store(false, Ordering::SeqCst);
+
+    let mut child;
+    let pid = {
+        // 检查 + spawn + 写 pid 放进同一临界区，杜绝 TOCTOU 双启动
+        let mut g = state.0.lock().unwrap_or_else(|e| e.into_inner());
         if g.is_some() {
             return Err("已有任务在运行,请先停止".into());
         }
-    }
+        // … 构造 cmd …
+        let mut cmd = Command::new(&python);
+        cmd.current_dir(&code_dir).arg("run_chain.py");
+        if !data_path.trim().is_empty() {
+            cmd.arg("--data").arg(data_path.trim());
+        }
+        if skip_processing {
+            cmd.arg("--skip-processing");
+        }
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.env("PYTHONUNBUFFERED", "1")
+            .env("PYTHONIOENCODING", "utf-8");
+        no_window(&mut cmd);
 
-    let mut cmd = Command::new(&python);
-    cmd.current_dir(&code_dir).arg("run_chain.py");
-    if !data_path.trim().is_empty() {
-        cmd.arg("--data").arg(data_path.trim());
-    }
-    if skip_processing {
-        cmd.arg("--skip-processing");
-    }
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    cmd.env("PYTHONUNBUFFERED", "1")
-        .env("PYTHONIOENCODING", "utf-8");
-
-    let mut child = cmd.spawn().map_err(|e| format!("启动失败: {e}"))?;
-    let pid = child.id();
+        // spawn 失败时锁自然释放且不写入 pid
+        child = cmd.spawn().map_err(|e| format!("启动失败: {e}"))?;
+        let pid = child.id();
+        *g = Some(pid);
+        pid
+    };
     emit_log(&app, "ok", format!("任务已启动 (PID {pid})"));
 
-    if let Some(stdout) = child.stdout.take() {
-        let app2 = app.clone();
-        std::thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines().map_while(Result::ok) {
-                if let Some(stage) = parse_stage(&line) {
-                    let _ = app2.emit("pipeline-stage", &stage);
+    // stdout / stderr 读取线程；保存 JoinHandle 供 wait 线程 join
+    let h_out = match child.stdout.take() {
+        Some(stdout) => {
+            let app2 = app.clone();
+            std::thread::spawn(move || {
+                let reader = BufReader::new(stdout);
+                for line in reader.lines().map_while(Result::ok) {
+                    if let Some(stage) = parse_stage(&line) {
+                        let _ = app2.emit("pipeline-stage", &stage);
+                    }
+                    let _ = app2.emit(
+                        "pipeline-log",
+                        LogLine {
+                            level: "info".into(),
+                            text: line,
+                        },
+                    );
                 }
-                let _ = app2.emit(
-                    "pipeline-log",
-                    LogLine {
-                        level: "info".into(),
-                        text: line,
-                    },
-                );
-            }
-        });
-    }
-    if let Some(stderr) = child.stderr.take() {
-        let app2 = app.clone();
-        std::thread::spawn(move || {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
-                let _ = app2.emit(
-                    "pipeline-log",
-                    LogLine {
-                        level: "error".into(),
-                        text: line,
-                    },
-                );
-            }
-        });
-    }
-
-    *state.0.lock().unwrap() = Some(pid);
+            })
+        }
+        None => std::thread::spawn(|| {}),
+    };
+    let h_err = match child.stderr.take() {
+        Some(stderr) => {
+            let app2 = app.clone();
+            std::thread::spawn(move || {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines().map_while(Result::ok) {
+                    let _ = app2.emit(
+                        "pipeline-log",
+                        LogLine {
+                            level: "error".into(),
+                            text: line,
+                        },
+                    );
+                }
+            })
+        }
+        None => std::thread::spawn(|| {}),
+    };
 
     let app3 = app.clone();
     let running = state.0.clone();
+    let cancelled = cancelled.0.clone();
     std::thread::spawn(move || {
         let start = Instant::now();
         let status = child.wait();
+        // 等两个 reader 线程读完最后几行再 emit done，保证日志不乱序/不丢失
+        let _ = h_out.join();
+        let _ = h_err.join();
         let ok = status.as_ref().map(|s| s.success()).unwrap_or(false);
         let code = status.as_ref().ok().and_then(|s| s.code());
-        *running.lock().unwrap() = None;
+        *running.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let stopped = cancelled.load(Ordering::SeqCst);
+        if stopped {
+            cancelled.store(false, Ordering::SeqCst);
+        }
+        let (ok, error) = if stopped {
+            (false, Some("已被用户停止".into()))
+        } else {
+            (ok, None)
+        };
         let _ = app3.emit(
             "pipeline-done",
             DoneEvent {
                 ok,
                 code,
                 duration_ms: start.elapsed().as_millis(),
-                error: None,
+                error,
             },
         );
     });
@@ -306,36 +466,67 @@ async fn run_pipeline(
     Ok(pid)
 }
 
-/// 解析 "[STAGE 2/5] 客户分析" 形式的阶段标记
+/// 解析 "[STAGE 2/5] 客户分析" 形式的阶段标记(名称可省略:"[STAGE 2/5]")
 fn parse_stage(line: &str) -> Option<StageEvent> {
     let s = line.trim();
-    let rest = s.strip_prefix("[STAGE")?;
-    let inner = rest.trim_start().trim_end_matches(']');
-    let mut parts = inner.splitn(2, char::is_whitespace);
-    let frac = parts.next()?;
+    let rest = s.strip_prefix("[STAGE")?.trim_start();
+    let end = rest.find(']')?;
+    let frac = rest[..end].trim();
     let (n, total) = frac.split_once('/')?;
     Some(StageEvent {
-        n: n.trim().parse().ok()?,
-        total: total.trim().parse().ok()?,
-        name: parts.next().unwrap_or("").trim().to_string(),
+        n: n.parse().ok()?,
+        total: total.parse().ok()?,
+        name: rest[end + 1..].trim().to_string(),
     })
+}
+
+/// 运行环境依赖健康检查：一次性 import 所需依赖，缺任何一个即报错
+fn check_deps(python: &Path) -> Result<(), String> {
+    let mut cmd = Command::new(python);
+    cmd.args(["-c", "import pandas,numpy,sklearn,statsmodels,matplotlib,rapidfuzz,chinese_calendar"]);
+    no_window(&mut cmd);
+    let out = cmd.output().map_err(|e| format!("无法启动 Python: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        let tail = String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .last()
+            .unwrap_or("")
+            .to_string();
+        Err(format!(
+            "运行环境不完整(依赖缺失),请等待自动安装完成或重新执行环境安装。{tail}"
+        ))
+    }
 }
 
 // ── 停止 ──────────────────────────────────────────────
 #[tauri::command]
-async fn stop_pipeline(app: AppHandle, state: State<'_, Running>) -> Result<(), String> {
-    let pid = { state.0.lock().unwrap().clone() };
+async fn stop_pipeline(
+    app: AppHandle,
+    state: State<'_, Running>,
+    cancelled: State<'_, Cancelled>,
+) -> Result<(), String> {
+    let pid = { state.0.lock().unwrap_or_else(|e| e.into_inner()).clone() };
     if let Some(pid) = pid {
         emit_log(&app, "warn", format!("正在停止任务 (PID {pid})..."));
-        let out = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .output()
-            .map_err(|e| e.to_string())?;
+        let mut cmd = Command::new("taskkill");
+        cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
+        no_window(&mut cmd);
+        let out = cmd.output().map_err(|e| e.to_string())?;
+        // taskkill 输出是 GBK 编码,不再透传;只按退出状态报自有中文信息
         emit_log(
             &app,
             if out.status.success() { "ok" } else { "warn" },
-            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            if out.status.success() {
+                format!("已停止任务 (PID {pid})")
+            } else {
+                "停止指令发送失败,任务可能已自行退出".into()
+            },
         );
+        // taskkill 后立即清状态 + 标记用户停止，避免 wait 线程卡住导致永远无法再运行
+        *state.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        cancelled.0.store(true, Ordering::SeqCst);
     } else {
         emit_log(&app, "warn", "没有正在运行的任务".into());
     }
@@ -345,7 +536,7 @@ async fn stop_pipeline(app: AppHandle, state: State<'_, Running>) -> Result<(), 
 // ── 打开看板 / 产物 ───────────────────────────────────
 #[tauri::command]
 async fn open_dashboard() -> Result<String, String> {
-    let dir = app_root().join("code").join("dashboard");
+    let dir = data_root().join("code").join("dashboard");
     let mut latest: Option<(std::time::SystemTime, PathBuf)> = None;
     for entry in fs::read_dir(&dir).map_err(|e| format!("读取目录失败: {e}"))? {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -367,16 +558,17 @@ async fn open_dashboard() -> Result<String, String> {
     let path = latest
         .map(|(_, p)| p)
         .ok_or_else(|| "还没有生成看板,请先运行流水线".to_string())?;
-    Command::new("cmd")
-        .args(["/C", "start", "", path.to_str().unwrap_or("")])
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    Ok(path.display().to_string())
+    // 直接用 explorer + PathBuf，避免非 UTF-8 路径在 cmd /C start 下打开空路径
+    let mut cmd = Command::new("explorer");
+    cmd.arg(&path);
+    no_window(&mut cmd);
+    cmd.spawn().map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
 async fn open_folder(kind: String) -> Result<String, String> {
-    let base = app_root().join("code").join("output");
+    let base = data_root().join("code").join("output");
     let dir = match kind.as_str() {
         "silver" | "gold" | "report" => base.join(&kind),
         "output" => base,
@@ -385,21 +577,28 @@ async fn open_folder(kind: String) -> Result<String, String> {
     if !dir.exists() {
         return Err(format!("目录尚不存在: {}", dir.display()));
     }
-    Command::new("explorer")
-        .arg(&dir)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    let mut cmd = Command::new("explorer");
+    cmd.arg(&dir);
+    no_window(&mut cmd);
+    cmd.spawn().map_err(|e| e.to_string())?;
     Ok(dir.display().to_string())
 }
 
 // ── 环境自举 ──────────────────────────────────────────
 /// 检测系统 Python → 创建 .venv → 安装 requirements(全部流式日志)
+/// 文件级并发守卫：同一时刻只允许一个环境安装流程
+static SETUP_ACTIVE: AtomicBool = AtomicBool::new(false);
+
 #[tauri::command]
 async fn setup_env(app: AppHandle) -> Result<bool, String> {
-    let root = app_root();
+    if SETUP_ACTIVE.swap(true, Ordering::SeqCst) {
+        return Err("环境安装正在进行中,请稍候".into());
+    }
+    let root = data_root();
     let venv = venv_python();
     let req = root.join("code").join("requirements.txt");
     if !req.exists() {
+        SETUP_ACTIVE.store(false, Ordering::SeqCst);
         return Err("代码尚未同步,没有 requirements.txt".into());
     }
 
@@ -409,18 +608,31 @@ async fn setup_env(app: AppHandle) -> Result<bool, String> {
     } else {
         find_system_python()
     };
-    let system_python = system_python.ok_or("未找到可用的 Python,请安装 Anaconda 或 Python 3.10+")?;
+    let system_python = match system_python {
+        Some(p) => p,
+        None => {
+            SETUP_ACTIVE.store(false, Ordering::SeqCst);
+            return Err("未找到可用的 Python,请安装 Anaconda 或 Python 3.10+".into());
+        }
+    };
     emit_log(&app, "info", format!("使用 Python: {}", system_python.display()));
 
-    // 2. 建 venv
+    // 2. 建 venv（可能耗时 10-30 秒，放 blocking 线程）
     if !venv.exists() {
         emit_log(&app, "info", "创建虚拟环境 .venv ...".into());
-        let out = Command::new(&system_python)
-            .args(["-m", "venv", "--system-site-packages", ".venv"])
-            .current_dir(&root)
-            .output()
-            .map_err(|e| format!("创建 venv 失败: {e}"))?;
+        let sys = system_python.clone();
+        let vroot = root.clone();
+        let out = tauri::async_runtime::spawn_blocking(move || {
+            let mut cmd = Command::new(&sys);
+            cmd.args(["-m", "venv", ".venv"]).current_dir(&vroot);
+            no_window(&mut cmd);
+            cmd.output()
+        })
+        .await
+        .map_err(|e| format!("创建 venv 任务异常: {e}"))?
+        .map_err(|e| format!("创建 venv 失败: {e}"))?;
         if !out.status.success() {
+            SETUP_ACTIVE.store(false, Ordering::SeqCst);
             return Err(format!(
                 "创建 venv 失败: {}",
                 String::from_utf8_lossy(&out.stderr)
@@ -431,24 +643,31 @@ async fn setup_env(app: AppHandle) -> Result<bool, String> {
 
     // 3. pip 安装(清华镜像,后台线程流式输出)
     let app2 = app.clone();
+    let req2 = req.clone();
+    let root2 = root.clone();
+    let venv2 = venv.clone();
     std::thread::spawn(move || {
-        let mut cmd = Command::new(&venv);
+        let mut cmd = Command::new(&venv2);
         cmd.args([
             "-m",
             "pip",
             "install",
             "-r",
-            req.to_str().unwrap_or("requirements.txt"),
+            req2.to_str().unwrap_or("requirements.txt"),
             "-i",
             "https://pypi.tuna.tsinghua.edu.cn/simple",
             "--disable-pip-version-check",
         ])
-        .current_dir(&root)
+        .current_dir(&root2)
+        // 中文版 Windows 上 pip 默认按 GBK 读 requirements.txt,UTF-8 文件会炸(UnicodeDecodeError)
+        .env("PYTHONUTF8", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+        no_window(&mut cmd);
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
+                SETUP_ACTIVE.store(false, Ordering::SeqCst);
                 emit_log(&app2, "error", format!("pip 启动失败: {e}"));
                 let _ = app2.emit("setup-done", false);
                 return;
@@ -475,7 +694,13 @@ async fn setup_env(app: AppHandle) -> Result<bool, String> {
             });
         }
         let ok = child.wait().map(|s| s.success()).unwrap_or(false);
-        emit_log(&app2, if ok { "ok" } else { "error" }, if ok { "依赖安装完成".into() } else { "依赖安装失败".into() });
+        // pip 后台线程结束：重置并发守卫
+        SETUP_ACTIVE.store(false, Ordering::SeqCst);
+        emit_log(
+            &app2,
+            if ok { "ok" } else { "error" },
+            if ok { "依赖安装完成".into() } else { "依赖安装失败".into() },
+        );
         let _ = app2.emit("setup-done", ok);
     });
 
@@ -496,19 +721,43 @@ fn find_system_python() -> Option<PathBuf> {
     candidates.push(PathBuf::from(r"C:\Python310\python.exe"));
     if let Ok(home) = std::env::var("LOCALAPPDATA") {
         for ver in ["Python313", "Python312", "Python311", "Python310"] {
-            candidates.push(PathBuf::from(&home).join("Programs").join("Python").join(ver).join("python.exe"));
+            candidates.push(
+                PathBuf::from(&home)
+                    .join("Programs")
+                    .join("Python")
+                    .join(ver)
+                    .join("python.exe"),
+            );
         }
     }
+    // 逐个候选做版本检查，避免选中 Anaconda 自带的老版本 Python
     for c in candidates {
-        if c.exists() {
+        if c.exists() && python_ok(&c) {
             return Some(c);
         }
     }
-    // PATH 里找 python / py -3
+    // PATH 里找 python / python3 / py（同样校验版本）
     for name in ["python", "python3", "py"] {
-        if let Ok(out) = Command::new(name).arg("--version").output() {
+        let mut vcmd = Command::new(name);
+        vcmd.arg("--version");
+        no_window(&mut vcmd);
+        if let Ok(out) = vcmd.output() {
             if out.status.success() {
-                if let Ok(which) = Command::new("where").arg(name).output() {
+                let text = if String::from_utf8_lossy(&out.stdout).trim().is_empty() {
+                    String::from_utf8_lossy(&out.stderr).into_owned()
+                } else {
+                    String::from_utf8_lossy(&out.stdout).into_owned()
+                };
+                if !parse_python_version(&text)
+                    .map(|(major, minor)| major > 3 || (major == 3 && minor >= 10))
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                let mut wcmd = Command::new("where");
+                wcmd.arg(name);
+                no_window(&mut wcmd);
+                if let Ok(which) = wcmd.output() {
                     let first = String::from_utf8_lossy(&which.stdout)
                         .lines()
                         .next()
@@ -523,11 +772,170 @@ fn find_system_python() -> Option<PathBuf> {
     None
 }
 
+/// 检查候选 python 的版本是否 >= 3.10
+fn python_ok(python: &Path) -> bool {
+    let mut cmd = Command::new(python);
+    cmd.arg("--version");
+    no_window(&mut cmd);
+    cmd.output()
+        .ok()
+        .and_then(|out| {
+            let text = if String::from_utf8_lossy(&out.stdout).trim().is_empty() {
+                String::from_utf8_lossy(&out.stderr).into_owned()
+            } else {
+                String::from_utf8_lossy(&out.stdout).into_owned()
+            };
+            parse_python_version(&text).map(|(major, minor)| major > 3 || (major == 3 && minor >= 10))
+        })
+        .unwrap_or(false)
+}
+
+/// 解析 "Python 3.x.y" 输出，返回 (major, minor)
+fn parse_python_version(text: &str) -> Option<(u32, u32)> {
+    let rest = text.trim().strip_prefix("Python")?;
+    let mut parts = rest.trim().split('.');
+    let major = parts.next()?.trim().parse().ok()?;
+    let minor = parts.next()?.trim().parse().ok()?;
+    Some((major, minor))
+}
+
+// ── 健康检查 ──────────────────────────────────────────
+#[tauri::command]
+async fn health_check() -> Result<HealthResult, String> {
+    let python = venv_python();
+    if !python.exists() {
+        return Ok(HealthResult {
+            ok: false,
+            python: python.display().to_string(),
+            message: "运行环境未安装".into(),
+        });
+    }
+    let p = python.clone();
+    let r = tauri::async_runtime::spawn_blocking(move || {
+        let mut cmd = Command::new(&p);
+        cmd.args(["-c", "import pandas,numpy,sklearn,statsmodels,matplotlib,rapidfuzz,chinese_calendar"]);
+        no_window(&mut cmd);
+        cmd.output()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    match r {
+        Ok(out) if out.status.success() => Ok(HealthResult {
+            ok: true,
+            python: python.display().to_string(),
+            message: "依赖检查通过".into(),
+        }),
+        Ok(out) => Ok(HealthResult {
+            ok: false,
+            python: python.display().to_string(),
+            message: String::from_utf8_lossy(&out.stderr)
+                .lines()
+                .last()
+                .unwrap_or("依赖检查失败")
+                .to_string(),
+        }),
+        Err(e) => Ok(HealthResult {
+            ok: false,
+            python: python.display().to_string(),
+            message: format!("无法启动 Python: {e}"),
+        }),
+    }
+}
+
+// ── 壳子自更新 ─────────────────────────────────────────
+/// 一键自动更新：共享盘 <share>\app\ 下有 app-version.txt + *-setup.exe
+/// 1. 比对版本(不复用 check_app_update 的 None 语义,需区分「已最新」与「未找到」)
+/// 2. 按修改时间取最新安装包 → 拷到临时目录 → 隐藏 cmd 延迟静默安装 → 装完重开 → 退出
+#[tauri::command]
+async fn self_update(app: AppHandle) -> Result<String, String> {
+    // 1. 版本比对
+    let cfg = load_config();
+    let share_path = cfg.share_path.trim();
+    if share_path.is_empty() {
+        return Err("尚未配置共享盘路径".into());
+    }
+    let app_dir = Path::new(share_path).join("app");
+    let remote = fs::read_to_string(app_dir.join("app-version.txt"))
+        .map_err(|_| "无法读取共享盘版本文件 app-version.txt".to_string())?
+        .trim()
+        .to_string();
+    if remote.is_empty() {
+        return Err("共享盘版本文件内容为空".into());
+    }
+    if !version_newer(&remote, env!("CARGO_PKG_VERSION")) {
+        return Err("已是最新版本".into());
+    }
+
+    // 2. 找 *-setup.exe（按修改时间取最新）
+    let mut setups: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    for entry in fs::read_dir(&app_dir).map_err(|e| format!("读取共享盘 app 目录失败: {e}"))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let is_setup = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map_or(false, |n| n.ends_with("-setup.exe"));
+        if path.extension().and_then(|e| e.to_str()) == Some("exe") && is_setup {
+            let mtime = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            setups.push((mtime, path));
+        }
+    }
+    setups.sort_by(|a, b| b.0.cmp(&a.0));
+    let setup_exe = setups
+        .into_iter()
+        .next()
+        .map(|(_, p)| p)
+        .ok_or_else(|| "共享盘上未找到安装包".to_string())?;
+
+    // 3. 拷贝到临时目录(覆盖旧文件)
+    let target = std::env::temp_dir().join("KanbanPipeline-update.exe");
+    fs::copy(&setup_exe, &target).map_err(|e| format!("拷贝安装包失败: {e}"))?;
+
+    // 4. 隐藏 cmd：等 2s(等本进程退出) → 静默安装 → 装完重新启动新 exe
+    //    重开路径必须用 current_exe(当前运行的 exe 自己):实测 Tauri NSIS currentUser
+    //    装到 %LOCALAPPDATA%\KanbanPipeline(无 Programs 层),之前硬编码错误路径
+    //    导致装完静默失败、用户以为"什么都没弹出来"
+    let temp_exe = target.to_string_lossy().into_owned();
+    let current_exe = std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let script = format!(
+        "ping -n 3 127.0.0.1 >nul && \"{temp_exe}\" /S && start \"\" \"{current_exe}\""
+    );
+    let mut cmd = Command::new("cmd");
+    cmd.args(["/c", &script]);
+    no_window(&mut cmd);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd.spawn().map_err(|e| format!("启动更新程序失败: {e}"))?;
+
+    // 5. 先让 IPC 响应送达前端,再延迟退出本进程
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        app.exit(0);
+    });
+
+    Ok("正在更新:应用将关闭并自动安装新版本,完成后会自动重新打开".into())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // 防止双击启动第二个实例(两个 pip install/robocopy 会互踩坏环境);
+            // 重复启动时聚焦已有窗口
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .manage(Running::default())
+        .manage(Cancelled(Arc::new(AtomicBool::new(false))))
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,
@@ -537,7 +945,9 @@ pub fn run() {
             stop_pipeline,
             open_dashboard,
             open_folder,
-            setup_env
+            setup_env,
+            health_check,
+            self_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

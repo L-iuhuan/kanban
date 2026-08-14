@@ -9,11 +9,11 @@
 ├─ run_chain.py / processing/ / dashboard/ ...   ← 看板流水线代码(同步源)
 └─ version.txt                                    ← 开发者 push 钩子自动生成
 
-每台测试电脑 D:\KanbanApp\
+每台测试电脑 %LOCALAPPDATA%\KanbanRunner\   (exe 装哪都行,数据都在这个目录)
 ├─ KanbanRunner.exe   ← 本应用(Tauri)
 ├─ code\              ← 代码缓存(启动时自动 robocopy 同步)
 ├─ .venv\             ← Python 环境(应用自动创建/安装依赖)
-└─ config.json        ← 共享盘路径(首次运行设置)
+└─ config.json        ← 共享盘路径(可选,已预置默认值,见「配置」)
 ```
 
 **单向数据流**:代码从共享盘下拉 → 本地产出(output/看板)留在本地,不回传。
@@ -42,7 +42,9 @@ cargo tauri build --bundles nsis
 
 ## 配置
 
-config.json(应用目录下,界面「⚙ 设置」修改):
+config.json(`%LOCALAPPDATA%\KanbanRunner\config.json`,界面「⚙ 设置」修改):
+
+> 共享盘路径已在代码中预置默认值(`\\192.168.8.3\share\kanban-repo`),首次运行无需配置;设置界面仅用于覆盖。
 
 ```json
 {
@@ -50,6 +52,19 @@ config.json(应用目录下,界面「⚙ 设置」修改):
   "auto_sync": true
 }
 ```
+
+## 冒烟自检
+
+不连共享盘也能验证全链路。在「⚙ 设置」里把共享盘路径指向本仓库的 `kanban-share-sim` 目录(如 `E:\...\kanban\kanban-share-sim`),然后走一遍正常流程:
+
+1. **同步** → 应用把 `code\` 下的冒烟桩代码拉到本地(`run_chain.py` + `version.txt` + `requirements.txt`)
+2. **环境** → 自动创建 `.venv` 并装依赖(桩无第三方依赖,requirements.txt 只有注释,秒装)
+3. **运行** → 桩流水线约 5 秒跑完三阶段,打印 `[STAGE 1/3]..[STAGE 3/3]`,在 `output\` 下生成 silver/gold/report 占位文件
+4. **看板** → 「打开看板」直接看到 `dashboard\dashboard_stub.html` 暗色「冒烟测试看板」页(含版本号与数据文件名)
+
+整个自检(含环境安装+同步)约 30 秒,端到端验证「同步→环境→运行→看板」四步。
+
+**版本号**:开发者每次改完流水线代码、push 前,在流水线代码目录运行仓库根的 `tools\bump_version.ps1`,自动把当前 commit 短哈希 + 时间戳写入 `code\version.txt`(格式 `v<hash> @ 时间`)。客户端同步后即可看到对应版本,确认拿到的是最新代码。
 
 ## 阶段进度协议(看板流水线侧配合修改)
 

@@ -11,12 +11,16 @@ interface AppConfig {
 }
 interface Status {
   share_ok: boolean;
+  share_reachable: boolean;
   env_ok: boolean;
   synced: boolean;
   version: string;
   share_path: string;
   app_root: string;
   python: string;
+  update_available: string | null;
+  app_version: string;
+  remote_version: string | null;
 }
 interface SyncResult {
   ok: boolean;
@@ -40,6 +44,11 @@ interface DoneEvent {
   code: number | null;
   duration_ms: number;
   error: string | null;
+}
+interface HealthResult {
+  ok: boolean;
+  python: string;
+  message: string;
 }
 
 // ── 工具 ──────────────────────────────────────────────
@@ -66,6 +75,8 @@ let lastJobId = 0;
 let logLines = 0;
 let pipelineTotal = 0;
 let pipelineN = 0;
+let setupInProgress = false;
+let updateNoticeShown = false;
 
 type AppState = "idle" | "syncing" | "setting-up" | "running" | "done" | "failed";
 
@@ -126,6 +137,59 @@ function setDetail(text: string) {
   byId("stage-detail").textContent = text;
 }
 
+// ── 精确进度:按真实流水线实测的各阶段预期耗时做时间插值 ──
+// 校准值(2026-08-14 --force-silver 全量实测,总耗时 1433.5s;毫秒)
+// 耗时随数据量伸缩,阶段内进度最多走到 95%,下一阶段标记到达时校准
+const STAGE_EXPECTED_MS: number[] = [
+  48000, // 1 silver 数据清洗(实测 48s)
+  89000, // 2 product 产品生命周期(实测 89s)
+  262000, // 3 customer 客户分析(实测 4 分 22 秒)
+  3000, // 4 kpi 准实时(实测 1s,给 3s 下限避免进度条瞬跳)
+  3000, // 5 cross_ref 交叉关联(实测 2s,给 3s 下限)
+  1031000, // 6 dashboard 生成看板(实测 17 分 11 秒,占全程约 72%)
+];
+const PROGRESS_BASE = 0; // 进度条全部用于流水线 6 阶段(同步/环境不属于看板生成流程)
+let stageTimer: number | null = null;
+let stageBase = PROGRESS_BASE;
+let stageSpan = 0;
+let stageStartTs = 0;
+let stageExpected = 60000;
+let stageFloor = 0; // 子阶段通报抬升的进度下限(0~1),保证进度只前进不后退
+
+function stageProgressStop() {
+  if (stageTimer !== null) {
+    window.clearInterval(stageTimer);
+    stageTimer = null;
+  }
+}
+
+/** 子阶段通报抬升进度下限(如看板阶段日志中的 [3/8] 标记) */
+function stageProgressFloor(sub: number) {
+  stageFloor = Math.max(stageFloor, sub * 0.95);
+}
+
+function beginStageProgress(n: number, total: number, name: string) {
+  stageProgressStop();
+  // 按预期耗时占比分配 10%~100% 区间
+  const exp = Array.from({ length: total }, (_, i) => STAGE_EXPECTED_MS[i] ?? 60000);
+  const sum = exp.reduce((a, b) => a + b, 0);
+  const spans = exp.map((e) => ((100 - PROGRESS_BASE) * e) / sum);
+  stageBase = PROGRESS_BASE + spans.slice(0, n - 1).reduce((a, b) => a + b, 0);
+  stageSpan = spans[n - 1] ?? 0;
+  stageExpected = exp[n - 1] ?? 60000;
+  stageStartTs = Date.now();
+  stageFloor = 0;
+  const eta = Math.round(stageExpected / 1000);
+  const etaText = eta >= 60 ? Math.round(eta / 60) + " 分钟" : eta + " 秒";
+  setDetail("阶段 " + n + "/" + total + (name ? ":" + name : "") + " — 处理中(约 " + etaText + ")");
+  setProgress(stageBase);
+  stageTimer = window.setInterval(() => {
+    // 时间插值与子阶段通报取较大者,进度只前进不后退
+    const f = Math.min(Math.max((Date.now() - stageStartTs) / stageExpected, stageFloor), 0.95);
+    setProgress(stageBase + stageSpan * f);
+  }, 500);
+}
+
 // ── 状态机 ────────────────────────────────────────────
 function setAppState(state: AppState) {
   const btnRun = byId<HTMLButtonElement>("btn-run");
@@ -138,6 +202,7 @@ function setAppState(state: AppState) {
   running = state === "running" || state === "syncing" || state === "setting-up";
   btnStop.disabled = !running;
   btnRun.disabled = running;
+  byId<HTMLButtonElement>("btn-sync").disabled = running;
   const hasResult = state === "done";
   btnDash.disabled = !hasResult;
   btnSilver.disabled = !hasResult;
@@ -145,7 +210,7 @@ function setAppState(state: AppState) {
   btnReport.disabled = !hasResult;
   btnOutput.disabled = !hasResult;
   if (state === "done") {
-    setStageState(4, "done");
+    setStageState(5, "done");
     setProgress(100);
   }
 }
@@ -156,19 +221,54 @@ const dataFileEl = byId("data-file");
 
 function setDataFile(path: string | null) {
   dataFile = path;
+  // 切换文件卡片态:选中后文件信息成为视觉主角,提示元素退居次要
+  dropZone.classList.toggle("has-file", !!path);
   if (path) {
-    const name = path.split(/[\\/]/).pop();
-    dataFileEl.textContent = "当前文件: " + name + "  (" + path + ")";
+    const name = path.split(/[\\/]/).pop() ?? path;
+    byId("data-file-name").textContent = name;
+    byId("data-file-path").textContent = path;
     dataFileEl.hidden = false;
-    byId("drop-title")!.textContent = "换一个 Excel?拖进来或点击";
+    byId("drop-title").textContent = "已选择数据文件";
   } else {
     dataFileEl.hidden = true;
-    byId("drop-title")!.textContent = "把 Excel 拖到这里";
+    byId("drop-title").textContent = "把 Excel 拖到这里";
+    byId("drop-sub").textContent = "或点击选择文件";
   }
 }
 function byIdText(id: string, t: string) {
   byId(id).textContent = t;
 }
+/** 版本徽章:只显示版本号,完整信息(含发布时间)放 tooltip,避免被误认为系统时间 */
+function setVersionBadge(v: string) {
+  const badge = byId("version-badge");
+  badge.textContent = v.split(" @")[0];
+  badge.title = "代码版本: " + v;
+}
+
+// ── 代码更新巡检:共享盘出现新代码时高亮「同步代码」按钮并通报 ──
+let lastNotifiedRemote: string | null = null;
+
+function checkCodeUpdate(s: Status) {
+  if (
+    s.remote_version &&
+    s.remote_version !== s.version &&
+    s.remote_version !== lastNotifiedRemote
+  ) {
+    lastNotifiedRemote = s.remote_version;
+    byId("btn-sync").classList.add("attention");
+    const short = s.remote_version.split(" @")[0];
+    appendLog("warn", "检测到共享盘有新代码: " + short + ",点击「同步代码」更新");
+    setDetail("有新代码可同步: " + short);
+  }
+}
+
+// 使用中每 2 分钟巡检一次(仅空闲时;巡检失败静默,不打断使用)
+window.setInterval(() => {
+  if (running || setupInProgress) return;
+  invoke<Status>("get_status")
+    .then((s) => checkCodeUpdate(s))
+    .catch(() => {});
+}, 120000);
 
 // 拖拽事件(Tauri drag-drop)
 getCurrentWebview().onDragDropEvent((event) => {
@@ -179,7 +279,7 @@ getCurrentWebview().onDragDropEvent((event) => {
     dropZone.classList.remove("dragover");
     if (p.type === "drop") {
       const first = p.paths[0];
-      if (first && /.(xlsx|xls)$/i.test(first)) {
+      if (first && /\.(xlsx|xls)$/i.test(first)) {
         setDataFile(first);
         appendLog("info", "已选择数据文件: " + first);
       } else if (first) {
@@ -214,20 +314,21 @@ byId("opt-skip").addEventListener("change", () => {
 // ── 同步 ──────────────────────────────────────────────
 async function runSync(silent = false) {
   setAppState("syncing");
-  setStageState(0, "active");
-  setProgress(4);
   setDetail("正在从共享盘同步最新代码…");
   try {
     const r = await invoke<SyncResult>("sync_code");
     appendLog(r.ok ? "ok" : "error", r.message);
-    appendLog("info", "当前代码版本: " + r.version);
-    byIdText("version-badge", r.version);
-    setStageState(0, "done");
-    setProgress(8);
+    if (r.ok) {
+      appendLog("info", "当前代码版本: " + r.version);
+      setVersionBadge(r.version);
+      byId("btn-sync").classList.remove("attention");
+      lastNotifiedRemote = null;
+      // 同步完成的明确通报(步骤条已不含同步阶段,用详情行反馈)
+      setDetail("代码已同步,当前版本 " + r.version.split(" @")[0]);
+    }
     return r;
   } catch (e) {
     appendLog("error", "同步失败: " + e);
-    setStageState(0, "failed");
     if (!silent) showBanner("代码同步失败: " + e);
     setAppState("failed");
     return null;
@@ -243,8 +344,8 @@ async function runPipeline() {
     return;
   }
   setAppState("running");
-  setStageState(1, "active");
-  setProgress(10);
+  setProgress(2);
+  stageProgressStop();
   setDetail("检查运行环境…");
   pipelineTotal = 0;
   pipelineN = 0;
@@ -267,6 +368,44 @@ byId("btn-stop").addEventListener("click", async () => {
     await invoke("stop_pipeline");
   } catch (e) {
     appendLog("error", "停止失败: " + e);
+  }
+});
+
+// 手动同步/重试:共享盘恢复或代码推送后点击
+byId("btn-sync").addEventListener("click", async () => {
+  hideBanner();
+  const r = await runSync();
+  if (r && r.ok) await refreshStatus();
+});
+
+// 一键自动更新:从共享盘取安装包静默安装,完成后自动重启到新版本
+byId("btn-update").addEventListener("click", async () => {
+  const btn = byId<HTMLButtonElement>("btn-update");
+  btn.disabled = true;
+  btn.textContent = "正在更新…";
+  appendLog("info", "开始自动更新:正在从共享盘获取安装包…");
+  try {
+    const msg = await invoke<string>("self_update");
+    appendLog("ok", msg);
+  } catch (e) {
+    appendLog("error", "自动更新失败: " + e);
+    btn.disabled = false;
+    btn.textContent = "立即更新";
+  }
+});
+byId("btn-update-close").addEventListener("click", () => {
+  updateNoticeShown = true;
+  byId("update-banner").hidden = true;
+});
+
+// 设置里的「检查更新」:刷新状态,有新版时弹出蓝色更新横幅
+byId("btn-check-update").addEventListener("click", async () => {
+  appendLog("info", "正在检查更新…");
+  const s = await refreshStatus();
+  if (s && s.update_available) {
+    appendLog("ok", "发现新版本 v" + s.update_available + ",请点击上方蓝色横幅的「立即更新」");
+  } else {
+    appendLog("ok", "已是最新版本 (v" + (s ? s.app_version : "?") + ")");
   }
 });
 
@@ -358,11 +497,16 @@ byId("btn-save-config").addEventListener("click", async () => {
 async function refreshStatus() {
   try {
     const s = await invoke<Status>("get_status");
-    (window as unknown as { _cfg?: AppConfig })._cfg = {
-      share_path: s.share_path,
-      auto_sync: true,
-    };
-    byIdText("version-badge", s.synced ? s.version : "未同步");
+    const w = window as unknown as { _cfg?: AppConfig };
+    // _cfg 的权威来源是 init 的 get_config 和设置弹层的保存流程,
+    // 这里只负责在缺失时初始化,并跟随状态同步 share_path,绝不覆盖用户保存的 auto_sync。
+    if (!w._cfg) {
+      w._cfg = { share_path: s.share_path, auto_sync: true };
+    } else {
+      w._cfg = { ...w._cfg, share_path: s.share_path };
+    }
+    setVersionBadge(s.synced ? s.version : "未同步");
+    byIdText("app-version-text", "当前版本 v" + s.app_version);
     const net = byId("net-status");
     const netText = byId("net-text");
     net.classList.remove("ok", "bad");
@@ -372,20 +516,40 @@ async function refreshStatus() {
     } else if (s.share_ok) {
       net.classList.add("ok");
       netText.textContent = "共享盘已连接";
+    } else if (s.share_reachable && !s.synced) {
+      net.classList.add("bad");
+      netText.textContent = "已连接,等待代码推送";
+    } else if (s.synced) {
+      net.classList.add("bad");
+      netText.textContent = "离线模式(缓存可用)";
     } else {
       net.classList.add("bad");
       netText.textContent = "共享盘不可达";
     }
+    // 壳子更新提示:发现新版本时显示更新横幅(一键自动更新)
+    if (s.update_available && !updateNoticeShown) {
+      byIdText("update-text", "发现新版本 v" + s.update_available + ",可一键自动更新(约 1 分钟,无需卸载)");
+      byId("update-banner").hidden = false;
+    }
     if (s.env_ok) {
       appendLog("ok", "运行环境就绪: " + s.python);
     } else if (s.synced) {
-      appendLog("warn", "运行环境未就绪,正在自动安装(首次需要几分钟,请耐心等待)…");
-      void invoke("setup_env").catch((e) => {
-        appendLog("error", "环境安装启动失败: " + e);
-      });
+      if (!setupInProgress) {
+        appendLog("warn", "运行环境未就绪,正在自动安装(首次需要几分钟,请耐心等待)…");
+        setupInProgress = true;
+        setAppState("setting-up");
+        setDetail("首次安装运行环境(约 5-10 分钟,仅一次,之后启动秒开)…");
+        void invoke("setup_env").catch((e) => {
+          // 后端启动失败不会发 setup-done,必须在此复位,否则会一直卡在 setting-up
+          setupInProgress = false;
+          appendLog("error", "环境安装启动失败: " + e);
+          setAppState("failed");
+        });
+      }
     } else {
       appendLog("warn", "运行环境未就绪,同步代码后将自动安装");
     }
+    checkCodeUpdate(s);
     return s;
   } catch (e) {
     appendLog("error", "获取状态失败: " + e);
@@ -396,25 +560,44 @@ async function refreshStatus() {
 // ── 事件监听 ──────────────────────────────────────────
 listen<LogLine>("pipeline-log", (e) => {
   appendLog(e.payload.level, e.payload.text);
+  // 看板生成阶段(第 6 阶段,约占全程 72%/17 分钟)的子阶段通报:
+  // 解析日志中的 [n/8] 标记,持续反馈活动,避免长时间无进展误以为假死
+  if (pipelineN === 6 && running) {
+    const text = e.payload.text.trim();
+    if (!text.startsWith("[STAGE")) {
+      const m = text.match(/^\[(\d+)\/\d+\]\s*(.+)/);
+      if (m) {
+        stageProgressFloor(parseInt(m[1], 10) / 8);
+        setDetail("生成看板 — " + m[2].slice(0, 30) + " (" + m[1] + "/8)");
+      }
+    }
+  }
 });
 listen<StageEvent>("pipeline-stage", (e) => {
   const { n, total, name } = e.payload;
   pipelineTotal = total;
   pipelineN = n;
-  setStageState(2, "active");
-  setStageState(3, "active");
-  // 流水线内部阶段映射到 10%~90% 区间
-  const pct = 10 + (n / Math.max(1, total)) * 80;
-  setProgress(pct);
-  setDetail(
-    "阶段 " + n + "/" + total + (name ? ":" + name : "") + " — 处理中"
-  );
+  // 步骤条与流水线 6 个阶段一一对应(代码同步/环境检查不属于看板生成流程,不在步骤条中)
+  setStageState(n - 1, "active");
+  // 精确进度:按各阶段实测耗时加权 + 阶段内时间插值
+  beginStageProgress(n, total, name);
   appendLog("stage", "[STAGE " + n + "/" + total + "] " + name, true);
 });
 listen<DoneEvent>("pipeline-done", (e) => {
+  stageProgressStop();
+  // error 非空 = 用户手动停止
+  if (e.payload.error) {
+    appendLog(
+      "warn",
+      "任务已被用户停止 (耗时 " + fmtDuration(e.payload.duration_ms) + ")"
+    );
+    setDetail("已停止");
+    setAppState("idle");
+    return;
+  }
   const { ok, code, duration_ms } = e.payload;
   const msg =
-    (ok ? "✅ 流水线执行完成" : "❌ 流水线执行失败") +
+    (ok ? "流水线执行完成" : "流水线执行失败") +
     " (退出码 " +
     code +
     ",耗时 " +
@@ -432,14 +615,20 @@ listen<DoneEvent>("pipeline-done", (e) => {
   }
 });
 listen<SyncResult>("sync-done", (e) => {
-  byIdText("version-badge", e.payload.version);
+  setVersionBadge(e.payload.version);
   appendLog("info", "版本: " + e.payload.version);
 });
 listen<boolean>("setup-done", (e) => {
   const ok = e.payload;
+  setupInProgress = false;
   appendLog(ok ? "ok" : "error", ok ? "环境安装完成" : "环境安装失败");
   setAppState(ok ? "idle" : "failed");
   void refreshStatus();
+  if (ok) {
+    void invoke<HealthResult>("health_check")
+      .then((h) => appendLog(h.ok ? "ok" : "warn", "环境检查: " + h.message))
+      .catch((err) => appendLog("warn", "环境检查失败: " + err));
+  }
 });
 
 // ── 启动流程 ──────────────────────────────────────────
@@ -452,19 +641,45 @@ async function init() {
   }
   const s = await refreshStatus();
   if (!cfg || !cfg.share_path) {
-    appendLog("warn", "首次使用:请点击右上角 ⚙ 设置,填写共享盘代码目录");
+    appendLog("warn", "首次使用:请点击右上角「设置」填写共享盘代码目录");
     openSettings();
-    setAppState("idle");
+    if (!setupInProgress) setAppState("idle");
     return;
   }
   if (!s) return;
   if (cfg.auto_sync && s.share_ok) {
     await runSync(true);
+    // 同步完成后必须重新评估状态:首次运行时上面的 refreshStatus 在同步前执行,
+    // 彼时 synced=false 不会触发环境安装;这里补齐「首次运行:同步→自动装环境」链路
+    await refreshStatus();
   } else if (!s.share_ok) {
-    appendLog("error", "共享盘不可达: " + cfg.share_path + ",请检查网络或重新设置");
-    setAppState("failed");
+    if (s.synced) {
+      appendLog(
+        "warn",
+        "共享盘不可达,进入离线模式:使用本地缓存代码 (版本 " + s.version + ")"
+      );
+      if (!setupInProgress) setAppState("idle");
+    } else if (s.share_reachable) {
+      appendLog(
+        "warn",
+        "共享盘已连接,但上面还没有代码(等开发者推送后可点「同步代码」重试)"
+      );
+      if (!setupInProgress) setAppState("idle");
+    } else {
+      appendLog(
+        "error",
+        "共享盘不可达且本地无代码缓存: " + cfg.share_path + ",请检查网络后点「同步代码」重试"
+      );
+      setAppState("failed");
+    }
   }
-  setAppState("idle");
+  if (s.env_ok) {
+    // 启动时做一次环境健康检查,不阻塞启动流程
+    void invoke<HealthResult>("health_check")
+      .then((h) => appendLog(h.ok ? "ok" : "warn", "环境检查: " + h.message))
+      .catch((e) => appendLog("warn", "环境检查失败: " + e));
+  }
+  if (!setupInProgress) setAppState("idle");
 }
 
 void init();

@@ -16,6 +16,7 @@ release/
 
 # ── 运行时数据(kanban-runner) ──
 code/
+!kanban-share-sim/code/
 config.json
 output/
 data/
