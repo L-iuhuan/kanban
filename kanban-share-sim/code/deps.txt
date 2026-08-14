@@ -1,0 +1,5 @@
+# 流水线依赖声明(一行一个 import 名,# 开头为注释)
+# 冒烟桩只依赖 Python 标准库,本文件留空即可 —— 运行器会跳过依赖检查。
+# 真实流水线请在此列出 requirements.txt 对应的 import 名,例如:
+# pandas
+# numpy

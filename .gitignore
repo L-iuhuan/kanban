@@ -24,6 +24,12 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+# ── kanban-share-sim 冒烟桩运行产物(源文件仅 run_chain.py / requirements.txt / deps.txt / version.txt) ──
+kanban-share-sim/code/output/
+kanban-share-sim/code/dashboard/
+kanban-share-sim/code/processing/
+kanban-share-sim/code/chain_config.json
+
 # ── 编辑器与系统 ──
 .vscode/
 .idea/

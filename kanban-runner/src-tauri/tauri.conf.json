@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "KanbanPipeline",
+  "productName": "看板助手",
   "version": "0.3.3",
   "identifier": "com.vibecoder.kanbanrunner",
   "build": {
@@ -12,13 +12,12 @@
   "app": {
     "windows": [
       {
-        "title": "看板流水线",
+        "title": "看板助手",
         "width": 1280,
         "height": 800,
         "minWidth": 960,
         "minHeight": 660,
         "center": true,
-        "maximized": true,
         "decorations": false,
         "dragDropEnabled": true
       }

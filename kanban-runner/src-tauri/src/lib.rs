@@ -43,9 +43,6 @@ fn default_true() -> bool {
 #[derive(Serialize, Clone)]
 struct SyncResult {
     ok: bool,
-    changed: u32,
-    added: u32,
-    deleted: u32,
     version: String,
     message: String,
 }
@@ -68,6 +65,10 @@ struct Status {
     app_version: String,
     /// 共享盘 code/version.txt 的内容(检测运行期间开发者是否推送了新代码)
     remote_version: Option<String>,
+    /// 本地已有看板产物(dashboard/*.html):重启应用后也可直接打开历史看板
+    has_dashboard: bool,
+    /// 本地已有中间产物目录(output/):同上,重启后可直接打开
+    has_output: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -89,6 +90,8 @@ struct DoneEvent {
     code: Option<i32>,
     duration_ms: u128,
     error: Option<String>,
+    /// 本次运行的进程 pid:前端据此丢弃「停止后旧任务迟到的 done」,避免与新任务串台
+    pid: u32,
 }
 
 #[derive(Serialize, Clone)]
@@ -183,6 +186,14 @@ async fn save_config(cfg: AppConfig) -> Result<(), String> {
 // ── 状态 ──────────────────────────────────────────────
 #[tauri::command]
 async fn get_status() -> Result<Status, String> {
+    // 整个状态收集涉及 SMB/UNC 同步 IO(共享盘不可达时单次超时可达数十秒),
+    // 放 blocking 线程执行,避免占住 async worker(前端每 2 分钟巡检会反复调用)
+    tauri::async_runtime::spawn_blocking(compute_status)
+        .await
+        .map_err(|e| format!("状态检查任务异常: {e}"))
+}
+
+fn compute_status() -> Status {
     let cfg = load_config();
     let share_root = Path::new(cfg.share_path.trim());
     let share_reachable = !cfg.share_path.trim().is_empty() && share_root.exists();
@@ -209,7 +220,18 @@ async fn get_status() -> Result<Status, String> {
     } else {
         None
     };
-    Ok(Status {
+    // 本地产物存在性(重启应用后允许直接打开历史看板/中间产物)
+    let has_dashboard = code_dir
+        .join("dashboard")
+        .read_dir()
+        .map(|rd| {
+            rd.filter_map(|e| e.ok()).any(|e| {
+                e.path().extension().and_then(|x| x.to_str()) == Some("html")
+            })
+        })
+        .unwrap_or(false);
+    let has_output = code_dir.join("output").exists();
+    Status {
         share_ok,
         share_reachable,
         env_ok,
@@ -222,7 +244,9 @@ async fn get_status() -> Result<Status, String> {
         update_available,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         remote_version,
-    })
+        has_dashboard,
+        has_output,
+    }
 }
 
 /// 检查共享盘 app/app-version.txt 是否有更新版本的运行器(壳子更新通道)
@@ -319,9 +343,6 @@ async fn sync_code(app: AppHandle) -> Result<SyncResult, String> {
     };
     let result = SyncResult {
         ok,
-        changed: if code & 1 != 0 { 1 } else { 0 },
-        added: 0,
-        deleted: if code & 2 != 0 { 1 } else { 0 },
         version: version.clone(),
         message: message.clone(),
     };
@@ -442,7 +463,14 @@ async fn run_pipeline(
         let _ = h_err.join();
         let ok = status.as_ref().map(|s| s.success()).unwrap_or(false);
         let code = status.as_ref().ok().and_then(|s| s.code());
-        *running.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        // 仅在槽位仍是本进程时清空:stop 后立即重跑的场景下,槽位可能已被新任务占用,
+        // 无条件清空会抹掉新任务的 pid(导致无法停止、可能双开)
+        {
+            let mut g = running.lock().unwrap_or_else(|e| e.into_inner());
+            if *g == Some(pid) {
+                *g = None;
+            }
+        }
         let stopped = cancelled.load(Ordering::SeqCst);
         if stopped {
             cancelled.store(false, Ordering::SeqCst);
@@ -459,6 +487,7 @@ async fn run_pipeline(
                 code,
                 duration_ms: start.elapsed().as_millis(),
                 error,
+                pid,
             },
         );
     });
@@ -480,10 +509,41 @@ fn parse_stage(line: &str) -> Option<StageEvent> {
     })
 }
 
-/// 运行环境依赖健康检查：一次性 import 所需依赖，缺任何一个即报错
+/// 运行所需依赖清单:优先读共享盘代码里的 code/deps.txt(流水线侧声明,
+/// 一行一个 import 名,# 开头为注释);文件不存在时回退到内置清单。
+/// 空文件(或全是注释)= 跳过检查(纯标准库流水线/冒烟桩场景)。
+fn required_deps() -> Vec<String> {
+    let f = data_root().join("code").join("deps.txt");
+    match fs::read_to_string(f) {
+        Ok(s) => s
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(String::from)
+            .collect(),
+        Err(_) => [
+            "pandas",
+            "numpy",
+            "sklearn",
+            "statsmodels",
+            "matplotlib",
+            "rapidfuzz",
+            "chinese_calendar",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+    }
+}
+
+/// 运行环境依赖健康检查:一次性 import 所需依赖,缺任何一个即报错
 fn check_deps(python: &Path) -> Result<(), String> {
+    let deps = required_deps();
+    if deps.is_empty() {
+        return Ok(());
+    }
     let mut cmd = Command::new(python);
-    cmd.args(["-c", "import pandas,numpy,sklearn,statsmodels,matplotlib,rapidfuzz,chinese_calendar"]);
+    cmd.args(["-c", &format!("import {}", deps.join(","))]);
     no_window(&mut cmd);
     let out = cmd.output().map_err(|e| format!("无法启动 Python: {e}"))?;
     if out.status.success() {
@@ -628,9 +688,19 @@ async fn setup_env(app: AppHandle) -> Result<bool, String> {
             no_window(&mut cmd);
             cmd.output()
         })
-        .await
-        .map_err(|e| format!("创建 venv 任务异常: {e}"))?
-        .map_err(|e| format!("创建 venv 失败: {e}"))?;
+        .await;
+        // 失败路径必须复位并发守卫,否则后续 setup_env 永远报「正在进行中」,只能重启应用
+        let out = match out {
+            Ok(Ok(o)) => o,
+            Ok(Err(e)) => {
+                SETUP_ACTIVE.store(false, Ordering::SeqCst);
+                return Err(format!("创建 venv 失败: {e}"));
+            }
+            Err(e) => {
+                SETUP_ACTIVE.store(false, Ordering::SeqCst);
+                return Err(format!("创建 venv 任务异常: {e}"));
+            }
+        };
         if !out.status.success() {
             SETUP_ACTIVE.store(false, Ordering::SeqCst);
             return Err(format!(
@@ -812,20 +882,29 @@ async fn health_check() -> Result<HealthResult, String> {
     }
     let p = python.clone();
     let r = tauri::async_runtime::spawn_blocking(move || {
+        let deps = required_deps();
+        if deps.is_empty() {
+            return Ok(None);
+        }
         let mut cmd = Command::new(&p);
-        cmd.args(["-c", "import pandas,numpy,sklearn,statsmodels,matplotlib,rapidfuzz,chinese_calendar"]);
+        cmd.args(["-c", &format!("import {}", deps.join(","))]);
         no_window(&mut cmd);
-        cmd.output()
+        cmd.output().map(Some)
     })
     .await
     .map_err(|e| e.to_string())?;
     match r {
-        Ok(out) if out.status.success() => Ok(HealthResult {
+        Ok(None) => Ok(HealthResult {
+            ok: true,
+            python: python.display().to_string(),
+            message: "流水线未声明依赖(deps.txt),跳过检查".into(),
+        }),
+        Ok(Some(out)) if out.status.success() => Ok(HealthResult {
             ok: true,
             python: python.display().to_string(),
             message: "依赖检查通过".into(),
         }),
-        Ok(out) => Ok(HealthResult {
+        Ok(Some(out)) => Ok(HealthResult {
             ok: false,
             python: python.display().to_string(),
             message: String::from_utf8_lossy(&out.stderr)
@@ -925,6 +1004,25 @@ async fn self_update(app: AppHandle) -> Result<String, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            // 启动时按主显示器尺寸把窗口设为横版:宽 62%、高 62%,居中;
+            // 不小于 tauri.conf.json 的最小尺寸(960x660)。
+            // 失败(拿不到显示器信息)时静默回退到 tauri.conf.json 的固定尺寸。
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main") {
+                if let Ok(Some(m)) = w.current_monitor() {
+                    let scale = m.scale_factor();
+                    let logical_w = m.size().width as f64 / scale;
+                    let logical_h = m.size().height as f64 / scale;
+                    let _ = w.set_size(tauri::LogicalSize::new(
+                        (logical_w * 0.62).max(960.0),
+                        (logical_h * 0.62).max(660.0),
+                    ));
+                    let _ = w.center();
+                }
+            }
+            Ok(())
+        })
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // 防止双击启动第二个实例(两个 pip install/robocopy 会互踩坏环境);
             // 重复启动时聚焦已有窗口

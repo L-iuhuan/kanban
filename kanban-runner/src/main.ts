@@ -21,12 +21,11 @@ interface Status {
   update_available: string | null;
   app_version: string;
   remote_version: string | null;
+  has_dashboard: boolean;
+  has_output: boolean;
 }
 interface SyncResult {
   ok: boolean;
-  changed: number;
-  added: number;
-  deleted: number;
   version: string;
   message: string;
 }
@@ -44,6 +43,7 @@ interface DoneEvent {
   code: number | null;
   duration_ms: number;
   error: string | null;
+  pid: number;
 }
 interface HealthResult {
   ok: boolean;
@@ -68,6 +68,14 @@ function ts(): string {
   return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
 }
 
+// ── 主题(浅色/深色,默认浅色,localStorage 记忆) ──
+const rootEl = document.documentElement;
+function applyTheme(t: "light" | "dark") {
+  rootEl.dataset.theme = t;
+  localStorage.setItem("theme", t);
+}
+applyTheme(localStorage.getItem("theme") === "dark" ? "dark" : "light");
+
 // ── 全局状态 ──────────────────────────────────────────
 let dataFile: string | null = null;
 let running = false;
@@ -75,8 +83,14 @@ let lastJobId = 0;
 let logLines = 0;
 let pipelineTotal = 0;
 let pipelineN = 0;
+let pipelineStageName = "";
 let setupInProgress = false;
 let updateNoticeShown = false;
+let cfgCache: AppConfig | null = null;
+let appState: AppState = "idle";
+// 本地产物存在性(后端 get_status 提供):重启应用后也允许打开历史看板/中间产物
+let hasDashboard = false;
+let hasOutput = false;
 
 type AppState = "idle" | "syncing" | "setting-up" | "running" | "done" | "failed";
 
@@ -85,6 +99,9 @@ const win = getCurrentWindow();
 byId("btn-min").addEventListener("click", () => void win.minimize());
 byId("btn-max").addEventListener("click", () => void win.toggleMaximize());
 byId("btn-close").addEventListener("click", () => void win.close());
+byId("btn-theme").addEventListener("click", () => {
+  applyTheme(rootEl.dataset.theme === "light" ? "dark" : "light");
+});
 
 // ── 日志 ──────────────────────────────────────────────
 const logBody = byId("log-body");
@@ -118,16 +135,49 @@ function hideBanner() {
   byId("error-banner").hidden = true;
 }
 
-// ── 阶段 stepper ──────────────────────────────────────
-const stepperItems = Array.from(
-  byId("stepper").querySelectorAll("li")
-) as HTMLLIElement[];
+// ── 阶段 stepper(按 pipeline-stage 事件动态生成,不认死阶段数/名称) ──
+const stepperEl = byId("stepper");
+let stepperItems: HTMLLIElement[] = [];
+let stepperTotal = 0;
+
+const S_CHECK_SVG =
+  '<svg class="s-check" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+const S_X_SVG =
+  '<svg class="s-x" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+
+/** 首次收到阶段事件前显示占位提示 */
+function showStepperPlaceholder() {
+  stepperEl.innerHTML =
+    '<li class="placeholder"><span class="s-name">运行后按流水线上报的实际阶段展示</span></li>';
+}
+
+function buildStepper(total: number) {
+  stepperEl.innerHTML = "";
+  stepperItems = [];
+  stepperTotal = total;
+  for (let i = 0; i < total; i++) {
+    const li = document.createElement("li");
+    li.innerHTML =
+      '<span class="s-idx"><span class="s-num">' +
+      (i + 1) +
+      "</span>" +
+      S_CHECK_SVG +
+      S_X_SVG +
+      '</span><span class="s-name">阶段 ' +
+      (i + 1) +
+      "</span>";
+    stepperEl.appendChild(li);
+    stepperItems.push(li);
+  }
+}
 
 function setStageState(index: number, state: "active" | "done" | "failed") {
+  if (stepperItems.length === 0) return;
+  const idx = Math.max(0, Math.min(index, stepperItems.length - 1));
   stepperItems.forEach((li, i) => {
     li.classList.remove("active", "done", "failed");
-    if (i < index) li.classList.add("done");
-    else if (i === index) li.classList.add(state);
+    if (i < idx) li.classList.add("done");
+    else if (i === idx) li.classList.add(state);
   });
 }
 function setProgress(pct: number) {
@@ -140,6 +190,7 @@ function setDetail(text: string) {
 // ── 精确进度:按真实流水线实测的各阶段预期耗时做时间插值 ──
 // 校准值(2026-08-14 --force-silver 全量实测,总耗时 1433.5s;毫秒)
 // 耗时随数据量伸缩,阶段内进度最多走到 95%,下一阶段标记到达时校准
+// 仅作「按序号」的兜底估计:阶段数由流水线事件决定,超出本表长度的阶段用 60s 默认值
 const STAGE_EXPECTED_MS: number[] = [
   48000, // 1 silver 数据清洗(实测 48s)
   89000, // 2 product 产品生命周期(实测 89s)
@@ -192,6 +243,7 @@ function beginStageProgress(n: number, total: number, name: string) {
 
 // ── 状态机 ────────────────────────────────────────────
 function setAppState(state: AppState) {
+  appState = state;
   const btnRun = byId<HTMLButtonElement>("btn-run");
   const btnStop = byId<HTMLButtonElement>("btn-stop");
   const btnDash = byId<HTMLButtonElement>("btn-open-dashboard");
@@ -203,14 +255,16 @@ function setAppState(state: AppState) {
   btnStop.disabled = !running;
   btnRun.disabled = running;
   byId<HTMLButtonElement>("btn-sync").disabled = running;
-  const hasResult = state === "done";
-  btnDash.disabled = !hasResult;
-  btnSilver.disabled = !hasResult;
-  btnGold.disabled = !hasResult;
-  btnReport.disabled = !hasResult;
-  btnOutput.disabled = !hasResult;
-  if (state === "done") {
-    setStageState(5, "done");
+  // 本次跑出结果,或本地已有历史产物(重启应用后)都可打开
+  const canViewDash = state === "done" || hasDashboard;
+  const canViewOut = state === "done" || hasOutput;
+  btnDash.disabled = !canViewDash;
+  btnSilver.disabled = !canViewOut;
+  btnGold.disabled = !canViewOut;
+  btnReport.disabled = !canViewOut;
+  btnOutput.disabled = !canViewOut;
+  if (state === "done" && stepperItems.length > 0) {
+    setStageState(stepperItems.length - 1, "done");
     setProgress(100);
   }
 }
@@ -221,20 +275,24 @@ const dataFileEl = byId("data-file");
 
 function setDataFile(path: string | null) {
   dataFile = path;
-  // 切换文件卡片态:选中后文件信息成为视觉主角,提示元素退居次要
+  // 切换文件卡片态:选中后占位提示整体隐藏,文件卡片成为拖拽区唯一主体
   dropZone.classList.toggle("has-file", !!path);
   if (path) {
     const name = path.split(/[\\/]/).pop() ?? path;
     byId("data-file-name").textContent = name;
     byId("data-file-path").textContent = path;
     dataFileEl.hidden = false;
-    byId("drop-title").textContent = "已选择数据文件";
   } else {
     dataFileEl.hidden = true;
-    byId("drop-title").textContent = "把 Excel 拖到这里";
-    byId("drop-sub").textContent = "或点击选择文件";
   }
 }
+
+// 移除已选文件(阻止冒泡,避免触发拖拽区的文件对话框)
+byId("btn-clear-file").addEventListener("click", (e) => {
+  e.stopPropagation();
+  setDataFile(null);
+  appendLog("info", "已移除数据文件");
+});
 function byIdText(id: string, t: string) {
   byId(id).textContent = t;
 }
@@ -245,7 +303,7 @@ function setVersionBadge(v: string) {
   badge.title = "代码版本: " + v;
 }
 
-// ── 代码更新巡检:共享盘出现新代码时高亮「同步代码」按钮并通报 ──
+// ── 代码更新巡检:共享盘出现新代码时高亮「更新代码」按钮并通报 ──
 let lastNotifiedRemote: string | null = null;
 
 function checkCodeUpdate(s: Status) {
@@ -257,8 +315,8 @@ function checkCodeUpdate(s: Status) {
     lastNotifiedRemote = s.remote_version;
     byId("btn-sync").classList.add("attention");
     const short = s.remote_version.split(" @")[0];
-    appendLog("warn", "检测到共享盘有新代码: " + short + ",点击「同步代码」更新");
-    setDetail("有新代码可同步: " + short);
+    appendLog("warn", "检测到共享盘有新代码: " + short + ",点击「更新代码」获取");
+    setDetail("有新代码可更新: " + short);
   }
 }
 
@@ -349,6 +407,7 @@ async function runPipeline() {
   setDetail("检查运行环境…");
   pipelineTotal = 0;
   pipelineN = 0;
+  pipelineStageName = "";
   try {
     lastJobId = await invoke<number>("run_pipeline", {
       dataPath: dataFile ?? "",
@@ -461,10 +520,8 @@ byId("banner-close").addEventListener("click", hideBanner);
 const settingsModal = byId("settings-modal");
 
 function openSettings() {
-  byId<HTMLInputElement>("share-path-input").value =
-    (window as unknown as { _cfg?: AppConfig })._cfg?.share_path ?? "";
-  byId<HTMLInputElement>("opt-auto-sync").checked =
-    (window as unknown as { _cfg?: AppConfig })._cfg?.auto_sync ?? true;
+  byId<HTMLInputElement>("share-path-input").value = cfgCache?.share_path ?? "";
+  byId<HTMLInputElement>("opt-auto-sync").checked = cfgCache?.auto_sync ?? true;
   settingsModal.hidden = false;
 }
 byId("btn-settings").addEventListener("click", openSettings);
@@ -478,10 +535,7 @@ byId("btn-save-config").addEventListener("click", async () => {
     await invoke("save_config", {
       cfg: { share_path: sharePath, auto_sync: autoSync },
     });
-    (window as unknown as { _cfg?: AppConfig })._cfg = {
-      share_path: sharePath,
-      auto_sync: autoSync,
-    };
+    cfgCache = { share_path: sharePath, auto_sync: autoSync };
     appendLog("ok", "设置已保存");
     settingsModal.hidden = true;
     if (sharePath) {
@@ -497,14 +551,17 @@ byId("btn-save-config").addEventListener("click", async () => {
 async function refreshStatus() {
   try {
     const s = await invoke<Status>("get_status");
-    const w = window as unknown as { _cfg?: AppConfig };
-    // _cfg 的权威来源是 init 的 get_config 和设置弹层的保存流程,
+    // cfgCache 的权威来源是 init 的 get_config 和设置弹层的保存流程,
     // 这里只负责在缺失时初始化,并跟随状态同步 share_path,绝不覆盖用户保存的 auto_sync。
-    if (!w._cfg) {
-      w._cfg = { share_path: s.share_path, auto_sync: true };
+    if (!cfgCache) {
+      cfgCache = { share_path: s.share_path, auto_sync: true };
     } else {
-      w._cfg = { ...w._cfg, share_path: s.share_path };
+      cfgCache = { ...cfgCache, share_path: s.share_path };
     }
+    // 产物存在性:本次运行跑出结果,或本地已有历史产物,都解锁对应按钮
+    hasDashboard = s.has_dashboard;
+    hasOutput = s.has_output;
+    setAppState(appState);
     setVersionBadge(s.synced ? s.version : "未同步");
     byIdText("app-version-text", "当前版本 v" + s.app_version);
     const net = byId("net-status");
@@ -560,15 +617,28 @@ async function refreshStatus() {
 // ── 事件监听 ──────────────────────────────────────────
 listen<LogLine>("pipeline-log", (e) => {
   appendLog(e.payload.level, e.payload.text);
-  // 看板生成阶段(第 6 阶段,约占全程 72%/17 分钟)的子阶段通报:
-  // 解析日志中的 [n/8] 标记,持续反馈活动,避免长时间无进展误以为假死
-  if (pipelineN === 6 && running) {
+  // 最后阶段(生成看板,长耗时)的子阶段通报:解析日志中的 [n/m] 标记,
+  // 持续反馈活动,避免长时间无进展误以为假死。分母取日志里的真实值,不写死。
+  if (pipelineTotal > 0 && pipelineN === pipelineTotal && running) {
     const text = e.payload.text.trim();
     if (!text.startsWith("[STAGE")) {
-      const m = text.match(/^\[(\d+)\/\d+\]\s*(.+)/);
+      const m = text.match(/^\[(\d+)\/(\d+)\]\s*(.+)/);
       if (m) {
-        stageProgressFloor(parseInt(m[1], 10) / 8);
-        setDetail("生成看板 — " + m[2].slice(0, 30) + " (" + m[1] + "/8)");
+        const sub = parseInt(m[1], 10);
+        const subTotal = parseInt(m[2], 10);
+        if (subTotal > 0) {
+          stageProgressFloor(sub / subTotal);
+          setDetail(
+            (pipelineStageName || "最后阶段") +
+              " — " +
+              m[3].slice(0, 30) +
+              " (" +
+              sub +
+              "/" +
+              subTotal +
+              ")"
+          );
+        }
       }
     }
   }
@@ -577,13 +647,22 @@ listen<StageEvent>("pipeline-stage", (e) => {
   const { n, total, name } = e.payload;
   pipelineTotal = total;
   pipelineN = n;
-  // 步骤条与流水线 6 个阶段一一对应(代码同步/环境检查不属于看板生成流程,不在步骤条中)
+  pipelineStageName = name;
+  // 步骤条完全由流水线上报驱动:阶段数变化时重建,名称以事件为准
+  if (total !== stepperTotal) buildStepper(total);
+  const li = stepperItems[n - 1];
+  if (li && name) {
+    const nameEl = li.querySelector(".s-name");
+    if (nameEl) nameEl.textContent = name;
+  }
   setStageState(n - 1, "active");
   // 精确进度:按各阶段实测耗时加权 + 阶段内时间插值
   beginStageProgress(n, total, name);
   appendLog("stage", "[STAGE " + n + "/" + total + "] " + name, true);
 });
 listen<DoneEvent>("pipeline-done", (e) => {
+  // 停止后立即重跑时,旧任务的 done 会迟到:pid 对不上说明不是当前任务,直接丢弃
+  if (e.payload.pid !== lastJobId) return;
   stageProgressStop();
   // error 非空 = 用户手动停止
   if (e.payload.error) {
@@ -599,7 +678,7 @@ listen<DoneEvent>("pipeline-done", (e) => {
   const msg =
     (ok ? "流水线执行完成" : "流水线执行失败") +
     " (退出码 " +
-    code +
+    (code ?? "—") +
     ",耗时 " +
     fmtDuration(duration_ms) +
     ")";
@@ -608,10 +687,11 @@ listen<DoneEvent>("pipeline-done", (e) => {
     setDetail("完成!可打开看板查看结果");
     setAppState("done");
   } else {
-    setStageState(3, "failed");
+    // 标红实际失败的阶段(没有收到过阶段事件时退化为不标)
+    if (pipelineN >= 1) setStageState(pipelineN - 1, "failed");
     setDetail("执行失败,请查看上方红色日志");
     setAppState("failed");
-    showBanner("流水线执行失败(退出码 " + code + ")。点右侧「复制日志」把日志发给开发者。");
+    showBanner("流水线执行失败(退出码 " + (code ?? "—") + ")。点右侧「复制日志」把日志发给开发者。");
   }
 });
 listen<SyncResult>("sync-done", (e) => {
@@ -634,10 +714,11 @@ listen<boolean>("setup-done", (e) => {
 // ── 启动流程 ──────────────────────────────────────────
 async function init() {
   hideBanner();
-  appendLog("info", "看板流水线运行器启动…");
+  showStepperPlaceholder();
+  appendLog("info", "看板助手启动…");
   const cfg = await invoke<AppConfig>("get_config").catch(() => null);
   if (cfg) {
-    (window as unknown as { _cfg?: AppConfig })._cfg = cfg;
+    cfgCache = cfg;
   }
   const s = await refreshStatus();
   if (!cfg || !cfg.share_path) {
@@ -662,13 +743,13 @@ async function init() {
     } else if (s.share_reachable) {
       appendLog(
         "warn",
-        "共享盘已连接,但上面还没有代码(等开发者推送后可点「同步代码」重试)"
+        "共享盘已连接,但上面还没有代码(等开发者推送后可点「更新代码」重试)"
       );
       if (!setupInProgress) setAppState("idle");
     } else {
       appendLog(
         "error",
-        "共享盘不可达且本地无代码缓存: " + cfg.share_path + ",请检查网络后点「同步代码」重试"
+        "共享盘不可达且本地无代码缓存: " + cfg.share_path + ",请检查网络后点「更新代码」重试"
       );
       setAppState("failed");
     }

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>看板流水线</title>
+    <title>看板助手</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
@@ -11,16 +11,17 @@
     <div class="titlebar" data-tauri-drag-region>
       <div class="titlebar-brand">
         <span class="logo"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>
-        <span class="app-title">看板流水线</span>
+        <span class="app-title">看板助手</span>
         <span class="badge" id="version-badge" title="代码版本">—</span>
         <span class="status" id="net-status" title="连接状态"><i class="dot"></i><span id="net-text">检测中</span></span>
       </div>
       <div class="titlebar-right">
+        <button id="btn-theme" class="tb-btn" title="切换浅色/深色主题"><svg class="icon-sun" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></button>
         <button id="btn-settings" class="tb-btn" title="设置"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
         <div class="win-controls">
-          <button id="btn-min" class="tb-btn" title="最小化">&#x2013;</button>
-          <button id="btn-max" class="tb-btn" title="最大化/还原">&#x25A1;</button>
-          <button id="btn-close" class="tb-btn tb-close" title="关闭">&#x2715;</button>
+          <button id="btn-min" class="tb-btn" title="最小化"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+          <button id="btn-max" class="tb-btn" title="最大化/还原"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></svg></button>
+          <button id="btn-close" class="tb-btn tb-close" title="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
       </div>
     </div>
@@ -44,43 +45,47 @@
 
       <!-- 上半区:拖拽 + 阶段 -->
       <section class="top-row">
-        <!-- Excel 拖拽区 -->
-        <div class="card drop-card" id="drop-zone">
+        <!-- Excel 拖拽区(与右侧阶段卡等高,由 grid 拉伸保证) -->
+        <div class="card drop-card" id="drop-zone" title="点击选择或更换文件">
           <div class="drop-inner">
-            <div class="drop-icon"><svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div>
-            <div class="drop-title" id="drop-title">把 Excel 拖到这里</div>
-            <div class="drop-sub" id="drop-sub">或点击选择文件</div>
+            <!-- 无文件时的占位提示;选中文件后整体隐藏 -->
+            <div class="drop-hint" id="drop-hint">
+              <div class="drop-icon"><svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div>
+              <div class="drop-title" id="drop-title">把 Excel 拖到这里</div>
+              <div class="drop-sub" id="drop-sub">或点击选择文件</div>
+            </div>
+            <!-- 选中文件后:文件卡片成为拖拽区主体 -->
             <div class="file-card" id="data-file" hidden>
               <span class="file-icon"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span>
               <div class="file-meta">
                 <div class="file-name" id="data-file-name"></div>
                 <div class="file-path" id="data-file-path"></div>
+                <div class="file-hint">点击可更换文件</div>
               </div>
+              <button class="file-clear" id="btn-clear-file" title="移除文件"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
             </div>
-            <label class="checkbox-row">
-              <input type="checkbox" id="opt-skip" />
-              <span>跳过数据处理(数据没变,只重新生成看板)</span>
-            </label>
           </div>
         </div>
 
         <!-- 阶段进度 -->
         <div class="card stage-card">
           <div class="stage-title">流程阶段</div>
-          <ol class="stepper" id="stepper">
-            <li data-stage="0"><span class="s-idx"><span class="s-num">1</span><svg class="s-check" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><svg class="s-x" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span><span class="s-name">数据清洗</span></li>
-            <li data-stage="1"><span class="s-idx"><span class="s-num">2</span><svg class="s-check" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><svg class="s-x" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span><span class="s-name">产品分析</span></li>
-            <li data-stage="2"><span class="s-idx"><span class="s-num">3</span><svg class="s-check" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><svg class="s-x" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span><span class="s-name">客户分析</span></li>
-            <li data-stage="3"><span class="s-idx"><span class="s-num">4</span><svg class="s-check" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><svg class="s-x" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span><span class="s-name">准实时KPI</span></li>
-            <li data-stage="4"><span class="s-idx"><span class="s-num">5</span><svg class="s-check" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><svg class="s-x" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span><span class="s-name">交叉关联</span></li>
-            <li data-stage="5"><span class="s-idx"><span class="s-num">6</span><svg class="s-check" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><svg class="s-x" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span><span class="s-name">生成看板</span></li>
-          </ol>
+          <!-- 步骤条由 JS 按流水线上报的 [STAGE n/total] 事件动态生成,不写死阶段数/名称 -->
+          <ol class="stepper" id="stepper"></ol>
           <div class="progress">
             <div class="progress-bar" id="progress-bar"></div>
           </div>
           <div class="stage-detail" id="stage-detail">等待开始</div>
         </div>
       </section>
+
+      <!-- 运行选项行:对齐左侧拖拽卡,与日志区拉开间距 -->
+      <div class="option-row">
+        <label class="checkbox-row">
+          <input type="checkbox" id="opt-skip" />
+          <span>跳过数据处理(数据没变,只重新生成看板)</span>
+        </label>
+      </div>
 
       <!-- 日志面板 -->
       <section class="card log-card">
@@ -96,23 +101,26 @@
         </div>
       </section>
 
-      <!-- 底部操作行 -->
+      <!-- 底部操作行:左侧操作组,右侧结果组(右对齐),窄窗口按组整体换行 -->
       <section class="actions">
-        <button id="btn-run" class="btn primary big"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg> 生成看板</button>
-        <button id="btn-stop" class="btn danger big" disabled><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2" ry="2"/></svg> 停止</button>
-        <button id="btn-sync" class="btn big"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> 同步代码</button>
-        <div class="actions-sep"></div>
-        <button id="btn-open-dashboard" class="btn" disabled><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg> 打开看板</button>
-        <div class="folder-group">
-          <span class="folder-label">中间产物</span>
-          <button id="btn-open-silver" class="btn ghost" disabled title="清洗后明细(silver)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg> 银层</button>
-          <button id="btn-open-gold" class="btn ghost" disabled title="汇总指标(gold)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg> 金层</button>
-          <button id="btn-open-report" class="btn ghost" disabled title="产品生命周期报告"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg> 报告</button>
+        <div class="actions-group">
+          <button id="btn-run" class="btn primary big"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg> 生成看板</button>
+          <button id="btn-stop" class="btn danger big" disabled><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2" ry="2"/></svg> 停止</button>
+          <button id="btn-sync" class="btn big" title="从共享盘获取最新看板程序"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> 更新代码</button>
         </div>
-        <button id="btn-open-output" class="btn ghost" disabled><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> 输出目录</button>
+        <div class="actions-group results-group">
+          <button id="btn-open-dashboard" class="btn" disabled><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg> 打开看板</button>
+          <div class="folder-group">
+            <span class="folder-label">结果文件</span>
+            <button id="btn-open-silver" class="btn ghost" disabled title="清洗后明细(output/silver)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg> 清洗明细</button>
+            <button id="btn-open-gold" class="btn ghost" disabled title="汇总指标(output/gold)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg> 汇总指标</button>
+            <button id="btn-open-report" class="btn ghost" disabled title="产品生命周期报告(output/report)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg> 生命周期报告</button>
+          </div>
+          <button id="btn-open-output" class="btn ghost" disabled title="打开输出目录(output)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> 全部产物</button>
+        </div>
       </section>
 
-      <footer class="footer" id="footer">看板流水线运行器 · 由 Rust + WebView2 驱动</footer>
+      <footer class="footer" id="footer">看板助手 · 由 Rust + WebView2 驱动</footer>
     </main>
 
     <!-- 设置弹层 -->
@@ -128,7 +136,7 @@
           <span>启动时自动同步代码</span>
         </label>
         <div class="field">
-          <span>软件更新</span>
+          <span>运行器更新(本应用自身的版本)</span>
           <div class="update-line">
             <span id="app-version-text">当前版本 v—</span>
             <button id="btn-check-update" class="mini-btn">检查更新</button>
