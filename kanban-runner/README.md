@@ -43,7 +43,7 @@ cargo tauri build --bundles nsis
 ```
 
 - 安装包产出在 `src-tauri/target/release/bundle/nsis/看板助手_<版本>_x64-setup.exe`(约 3.5 MB,currentUser 安装,免管理员)。
-- 随仓库分发的副本放仓库根 `installer/` 目录;GitHub Releases 也附同款安装包。
+- 随仓库分发的副本放仓库根 `installer/` 目录;GitHub Releases 也附同款安装包(GitHub 资产名不支持中文,Release 里叫 `KanbanAssistant_<版本>_x64-setup.exe`,内容相同)。
 - **发流水线代码**:改完代码后运行仓库根 `tools/publish_to_share.ps1`,自动镜像代码到共享盘 `code\` 并写 version.txt;加 `-AppInstaller <setup.exe> -AppVersion <版本>` 可同时发布壳子安装包到 `app\`(客户端启动时会提示「看板助手有新版本」,点「立即更新」自动换装)。
 
 ## 配置
