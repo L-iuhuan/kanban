@@ -201,10 +201,11 @@ Test-Path "$env:LOCALAPPDATA\KanbanRunner\update-result.txt"
 Test-Path "$env:LOCALAPPDATA\KanbanRunner\python\python.exe"
 ```
 
-## 九、遗留与后续
+## 九、遗留与后续(2026-08-18 收官时状态)
 
-- **P1-1/P1-2 运行时抽查**:中途关窗孤儿回收、半残自愈——编译级已验,GUI 场景待真实使用观察
-- **手册话术**(kanban-distribution-review.md 第四节):「跳过数据处理」首次勿勾、SmartScreen"仍要运行"、双更新通道说明、data\ 季度清理、版本徽章含义
-- **共享盘旧安装包清理**:`app\` 里 KanbanPipeline_0.2.0~0.3.3 五个旧包可删(现按 mtime 取最新不会误选,仅占空间)
-- **两仓库推 GitHub**:443 时断时续,走代理或 SSH(公钥已生成待登记)
-- **流水线深坑**(独立大改,见 `深度分析与修复建议报告.md` + distribution-review 第八节):silver 缓存哈希不覆盖数据、缓存路径缺 fillna、双管道口径不一致、dashboard 独立王国(占 72% 耗时)——动工前需 oracle 方案评审 + golden-diff 对拍
+- ~~P1-1/P1-2 运行时抽查~~ ✅ 用户实测通过:运行中关窗→重开再拖文件正常,且复用缓存
+- ~~手册话术~~ ✅ 已写 `kanban-操作手册.md`(装机/月度三步/双更新通道/常见问题/数据安全)
+- ~~共享盘旧安装包~~ ✅ 已清理,KanbanPipeline_0.2.0~0.3.3 及中间测试版全删,`app\` 只留 0.3.12
+- **流水线深坑:评审完毕、未开工** — 裁决书在流水线仓库 `深度分析评审裁决-2026-08-18.md`(P0-1 部分确认/P0-2~4 确认;四批次施工方案+验收标准;口径问题需业务终审)。开工按批次①缓存正确性起步
+- 壳侧小隐患(记录备用):`SETUP_ACTIVE` 守卫 pip 线程 panic 理论上不复位,可加 catch_unwind,不紧急
+- 两仓库推 GitHub:443 时断时续,走代理或 SSH(公钥已生成待登记)
