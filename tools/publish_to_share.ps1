@@ -32,7 +32,7 @@ if (Test-Path $personnel) {
   Write-Output "  人员对应表已提升到包根(随代码分发)"
 }
 
-Write-Output "[1/3] 同步代码: $SourceDir -> $dst"
+Write-Output "[1/4] 同步代码: $SourceDir -> $dst"
 robocopy $SourceDir $dst /MIR /XD .git output data __pycache__ .venv .pytest_cache test node_modules /XF *.pyc *.log "~`$*" /R:1 /W:1 /NFL /NDL /NJH /NP /MT:8 | Out-Null
 if ($LASTEXITCODE -gt 7) {
   Write-Error "代码同步失败 (robocopy 退出码 $LASTEXITCODE)"
@@ -47,9 +47,44 @@ try {
 } catch {}
 $ver = "v$hash @ $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
 [IO.File]::WriteAllText((Join-Path $dst "version.txt"), $ver)
-Write-Output "[2/3] 版本号已写入: $ver"
+Write-Output "[2/4] 版本号已写入: $ver"
 
-# ── 3. 可选:发布壳子安装包到 app/(客户端启动时提示更新) ──
+# ── deps.txt 自动生成(对接终版 check_deps 的依赖声明;UTF-8 无 BOM) ──
+$requirements = Join-Path $SourceDir "requirements.txt"
+if (Test-Path $requirements) {
+  $deps = @()
+  foreach ($line in [IO.File]::ReadAllLines($requirements)) {
+    # 去注释(# 及以后)并 trim
+    $item = $line.Split("#")[0].Trim()
+    if (-not $item) { continue }
+    # 去版本约束(>=/==/~=/>/< 及以后)
+    $item = ($item -split "[>=~<]")[0].Trim()
+    if (-not $item) { continue }
+    # 包名 -> import 名映射(其余原样)
+    switch ($item) {
+      "scikit-learn"     { $item = "sklearn" }
+      "python-calamine"  { $item = "python_calamine" }
+      "chinese-calendar" { $item = "chinese_calendar" }
+    }
+    $deps += $item
+  }
+  [IO.File]::WriteAllText((Join-Path $dst "deps.txt"), ($deps -join "`n"), [Text.UTF8Encoding]::new($false))
+  Write-Output "  deps.txt 已生成: $($deps.Count) 个依赖"
+} else {
+  Write-Output "  跳过 deps.txt 生成(未找到 requirements.txt)"
+}
+
+# ── 3/4 便携 Python 运行环境(免安装分发的核心) ──
+$portableSrc = "E:\3-其他资料\数据分析\kanban\portable-python"
+if (Test-Path (Join-Path $portableSrc "python.exe")) {
+  Write-Output "[3/4] 同步便携 Python 环境到共享盘 python\ (首次约 700MB,内网几分钟;之后增量)"
+  robocopy $portableSrc (Join-Path $ShareRoot "python") /MIR /XD __pycache__ /XF *.pyc /R:1 /W:1 /NFL /NDL /NJH /NP /MT:16 | Out-Null
+  if ($LASTEXITCODE -gt 7) { Write-Error "Python 环境同步失败 (robocopy $LASTEXITCODE)"; exit 1 }
+} else {
+  Write-Output "[3/4] 跳过便携 Python(未找到 $portableSrc\python.exe)"
+}
+
+# ── 4. 可选:发布壳子安装包到 app/(客户端启动时提示更新) ──
 if ($AppInstaller) {
   if (-not (Test-Path $AppInstaller)) {
     Write-Error "安装包不存在: $AppInstaller"
@@ -61,9 +96,9 @@ if ($AppInstaller) {
   if ($AppVersion) {
     [IO.File]::WriteAllText((Join-Path $appDir "app-version.txt"), $AppVersion)
   }
-  Write-Output "[3/3] 壳子安装包已发布: $appDir (版本 $AppVersion)"
+  Write-Output "[4/4] 壳子安装包已发布: $appDir (版本 $AppVersion)"
 } else {
-  Write-Output "[3/3] 跳过壳子发布(未提供 -AppInstaller)"
+  Write-Output "[4/4] 跳过壳子发布(未提供 -AppInstaller)"
 }
 
 Write-Output ""

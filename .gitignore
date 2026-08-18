@@ -6,6 +6,7 @@
 .tauri-cache/
 .venv/
 venv/
+portable-python/
 
 # ── 构建产物 ──
 node_modules/

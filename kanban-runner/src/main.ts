@@ -661,6 +661,26 @@ async function refreshStatus() {
   }
 }
 
+// ── 半残环境自愈 ──────────────────────────────────────
+// health_check 不通过(venv 存在但依赖缺失)时自动重跑 setup_env,补装缺失包。
+// 复用 setupInProgress 守卫,避免并发重复安装;setup-done 监听器负责复位守卫。
+function autoRepairEnv() {
+  if (setupInProgress) return;
+  appendLog("warn", "环境自检未通过,自动修复中…");
+  setupInProgress = true;
+  setAppState("setting-up");
+  setDetail("环境自检未通过,正在自动修复…");
+  byId<HTMLElement>("setup-progress").hidden = false;
+  byIdText("setup-progress-name", "环境自检未通过,自动修复中…");
+  byId<HTMLElement>("setup-progress-fill").classList.remove("failed");
+  void invoke("setup_env").catch((e) => {
+    // 后端启动失败不会发 setup-done,必须在此复位,否则会一直卡在 setting-up
+    setupInProgress = false;
+    appendLog("error", "环境修复启动失败: " + e);
+    setAppState("failed");
+  });
+}
+
 // ── 事件监听 ──────────────────────────────────────────
 listen<LogLine>("pipeline-log", (e) => {
   appendLog(e.payload.level, e.payload.text);
@@ -768,7 +788,11 @@ listen<boolean>("setup-done", (e) => {
       byId<HTMLElement>("setup-progress-fill").classList.remove("failed");
     }, 2000);
     void invoke<HealthResult>("health_check")
-      .then((h) => appendLog(h.ok ? "ok" : "warn", "环境检查: " + h.message))
+      .then((h) => {
+        appendLog(h.ok ? "ok" : "warn", "环境检查: " + h.message);
+        // 半残环境自愈:依赖缺失时自动重跑 setup_env 补齐
+        if (!h.ok) autoRepairEnv();
+      })
       .catch((err) => appendLog("warn", "环境检查失败: " + err));
   } else {
     byIdText("setup-progress-name", "环境准备失败,请查看日志");
@@ -836,7 +860,11 @@ async function init() {
   if (s.env_ok) {
     // 启动时做一次环境健康检查,不阻塞启动流程
     void invoke<HealthResult>("health_check")
-      .then((h) => appendLog(h.ok ? "ok" : "warn", "环境检查: " + h.message))
+      .then((h) => {
+        appendLog(h.ok ? "ok" : "warn", "环境检查: " + h.message);
+        // 半残环境自愈:venv 存在但依赖缺失时自动重跑 setup_env 补齐
+        if (!h.ok) autoRepairEnv();
+      })
       .catch((e) => appendLog("warn", "环境检查失败: " + e));
   }
   if (!setupInProgress) setAppState("idle");

@@ -147,8 +147,16 @@ fn write_config(cfg: &AppConfig) -> Result<(), String> {
     fs::write(config_path(), json).map_err(|e| e.to_string())
 }
 
+/// 运行环境 Python:优先用随代码同步下来的便携版(data_root\python\python.exe,
+/// 免安装分发核心);不存在才回落 .venv\Scripts\python.exe(系统 Python→venv 安装模式)。
+/// get_status 的 env_ok 判定、run_pipeline/check_deps 等均走本函数,自动随此生效。
 fn venv_python() -> PathBuf {
-    data_root().join(".venv").join("Scripts").join("python.exe")
+    let portable = data_root().join("python").join("python.exe");
+    if portable.exists() {
+        portable
+    } else {
+        data_root().join(".venv").join("Scripts").join("python.exe")
+    }
 }
 
 fn emit_log(app: &AppHandle, level: &str, text: String) {
@@ -330,6 +338,42 @@ async fn sync_code(app: AppHandle) -> Result<SyncResult, String> {
 
     let code = out.status.code().unwrap_or(-1);
     let ok = (0..=7).contains(&code);
+
+    // 便携 Python 运行环境同步:共享盘根 python\ 存在则同步到本地 data_root\python。
+    // 首次约 600-800MB(1-2 分钟),之后 robocopy 增量秒级。失败不改变代码同步的 ok
+    // 结果(日志提示回落本机安装模式,由 setup_env 回落路径兜底)。
+    let share_root = Path::new(cfg.share_path.trim());
+    if share_root.join("python").join("python.exe").exists() {
+        emit_log(
+            &app,
+            "info",
+            "检测到共享盘便携运行环境,首次同步约 600-800MB(1-2 分钟),之后增量秒级…".into(),
+        );
+        let py_src = share_root.join("python");
+        let py_dst = data_root().join("python");
+        fs::create_dir_all(&py_dst).map_err(|e| e.to_string())?;
+        let py_src_c = py_src.clone();
+        let py_dst_c = py_dst.clone();
+        let py_out = tauri::async_runtime::spawn_blocking(move || {
+            let mut cmd = Command::new("robocopy");
+            cmd.arg(&py_src_c)
+                .arg(&py_dst_c)
+                .args(["/MIR", "/XD", "__pycache__"])
+                .args(["/XF", "*.pyc"])
+                .args(["/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NP", "/MT:8"]);
+            no_window(&mut cmd);
+            cmd.output()
+        })
+        .await
+        .map_err(|e| format!("便携环境同步任务异常: {e}"))?
+        .map_err(|e| format!("无法执行 robocopy(便携环境): {e}"))?;
+        let py_code = py_out.status.code().unwrap_or(-1);
+        if (0..=7).contains(&py_code) {
+            emit_log(&app, "ok", "便携运行环境同步完成".into());
+        } else {
+            emit_log(&app, "warn", "便携环境同步失败,将回落本机安装模式".into());
+        }
+    }
 
     // 从本地读取版本号（离线时也能显示，不再依赖共享盘）
     let version = fs::read_to_string(dst.join("version.txt"))
@@ -655,6 +699,16 @@ async fn setup_env(app: AppHandle) -> Result<bool, String> {
         return Err("环境安装正在进行中,请稍候".into());
     }
     let root = data_root();
+    // 便携 Python 短路:运行环境已随代码同步(data_root\python\python.exe 存在),
+    // 无需任何安装动作,直接完成。注意:短路条件必须是便携路径本身,不能用
+    // venv_python()——否则 .venv 半残时会跳过 pip 补装的自愈路径。
+    let portable = root.join("python").join("python.exe");
+    if portable.exists() {
+        SETUP_ACTIVE.store(false, Ordering::SeqCst);
+        emit_log(&app, "info", "运行环境已随代码同步(便携 Python),无需安装".into());
+        let _ = app.emit("setup-done", true);
+        return Ok(true);
+    }
     let venv = venv_python();
     let req = root.join("code").join("requirements.txt");
     if !req.exists() {
@@ -1133,6 +1187,23 @@ pub fn run() {
             self_update,
             take_update_result
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // 退出时回收孤儿流水线进程:用户中途关窗,后台 python 继续跑会占着
+            // output/ 文件锁,下次启动再跑 → 双进程互踩、产出错乱。
+            // 在 Exit 事件(关窗默认 ExitRequested→Exit 的最终阶段)按 pid
+            // 连子进程(/T)一起强杀,兜底回收。
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                let state = app.state::<Running>();
+                let pid = state.0.lock().unwrap_or_else(|e| e.into_inner()).take();
+                if let Some(pid) = pid {
+                    let mut c = Command::new("taskkill");
+                    c.args(["/PID", &pid.to_string(), "/T", "/F"]);
+                    no_window(&mut c);
+                    let _ = c.output();
+                }
+            }
+        });
 }
