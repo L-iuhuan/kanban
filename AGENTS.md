@@ -14,14 +14,15 @@
 
 ## 本机环境怪癖(重要,不同于常规机器,已实测确认)
 
-- **远端主分支是 `main`,本地分支是 `master`**(跟踪 origin/main),拉取用 `git fetch origin main` + 合并,`git pull origin master` 会报 couldn't find remote ref。
-- **git 本地操作正常,但 HTTPS fetch/push GitHub 经常被截断**(schannel: server closed abruptly / early EOF)。解法:加 `-c http.version=HTTP/1.1` 重试即可,如 `git -c http.version=HTTP/1.1 fetch origin main`。`.git-tools/` 里的 isomorphic-git 是更早的绕过方案,现作备用。
-- **cargo/rustc 不在 PATH 上**:Rust 工具链是手动解压安装(绕过被拦截的 rustup),手动跑 cargo 前需设置:
+- **远端主分支是 `main`,本地分支也已改为 `main`**(直接 `git pull` 即可)。HTTPS fetch/push GitHub 经常被截断(schannel: server closed abruptly / early EOF),解法:加 `-c http.version=HTTP/1.1` 重试,如 `git -c http.version=HTTP/1.1 fetch origin main`。`.git-tools/` 里的 isomorphic-git 是更早的绕过方案,现作备用。
+- **cargo/rustc 不在 PATH 上**:Rust 工具链由 puccinialin 管理(rustup 缓存),手动跑 cargo 前需设置:
   ```powershell
-  $env:CARGO_HOME = "D:\Files\projects\架构测试\.cargo-home"
-  $env:RUSTC = "D:\Files\projects\架构测试\.rust-toolchain\bin\rustc.exe"
-  $env:PATH = "D:\Files\projects\架构测试\.rust-toolchain\bin;" + $env:PATH
+  $tc = "C:\Users\910373\AppData\Local\puccinialin\puccinialin\Cache"
+  $env:CARGO_HOME = "$tc\cargo"
+  $env:RUSTUP_HOME = "$tc\rustup"
+  $env:PATH = "$tc\cargo\bin;" + $env:PATH
   ```
+  (实测 cargo 1.95.0,2026-08-17 验证可用。旧文档曾写 `D:\Files\projects\架构测试\...`,该路径本机已不存在。)
 - Cargo registry 已配置 rsproxy.cn 镜像(各项目 `.cargo/config.toml`),保留勿删。
 - `.rust-toolchain/`、`.cargo-home/`、`.npm-cache/`、`.tauri-cache/` 是本地工具链/缓存目录,已 gitignore,不要提交也不要删除。
 

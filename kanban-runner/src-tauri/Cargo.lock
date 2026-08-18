@@ -1893,7 +1893,7 @@ dependencies = [
 
 [[package]]
 name = "kanban-runner"
-version = "0.3.3"
+version = "0.3.8"
 dependencies = [
  "serde",
  "serde_json",

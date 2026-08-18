@@ -76,6 +76,11 @@
             <div class="progress-bar" id="progress-bar"></div>
           </div>
           <div class="stage-detail" id="stage-detail">等待开始</div>
+          <div class="setup-progress" id="setup-progress" hidden>
+            <div class="setup-progress-head"><span>首次环境准备</span><span id="setup-progress-count"></span></div>
+            <div class="setup-progress-name" id="setup-progress-name"></div>
+            <div class="setup-progress-bar"><div class="setup-progress-fill" id="setup-progress-fill"></div></div>
+          </div>
         </div>
       </section>
 
@@ -140,12 +145,27 @@
           <div class="update-line">
             <span id="app-version-text">当前版本 v—</span>
             <button id="btn-check-update" class="mini-btn">检查更新</button>
+            <button id="btn-inline-update" class="mini-btn primary" hidden>立即更新</button>
           </div>
+          <div class="update-hint" id="update-hint" hidden></div>
         </div>
         <div class="modal-actions">
           <button id="btn-save-config" class="btn primary">保存并同步</button>
           <button id="btn-cancel-config" class="btn ghost">取消</button>
         </div>
+      </div>
+    </div>
+
+    <!-- 全屏更新遮罩 -->
+    <div class="modal-mask update-overlay" id="update-overlay" hidden>
+      <div class="modal update-card">
+        <h3>正在更新到 <span id="update-target-ver"></span></h3>
+        <ol class="update-steps" id="update-steps">
+          <li data-step="1"><span class="dot"></span>关闭应用</li>
+          <li data-step="2"><span class="dot"></span>静默安装(约 10-30 秒)</li>
+          <li data-step="3"><span class="dot"></span>自动重启</li>
+        </ol>
+        <p class="update-note">请勿关闭电脑，完成后应用将自动重新打开</p>
       </div>
     </div>
 

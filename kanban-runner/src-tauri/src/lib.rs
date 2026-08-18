@@ -663,6 +663,15 @@ async fn setup_env(app: AppHandle) -> Result<bool, String> {
     }
 
     // 1. 找系统 Python
+    // 阶段进度事件(独立事件名 setup-stage,避免和流水线的 pipeline-stage 串台)
+    let _ = app.emit(
+        "setup-stage",
+        &StageEvent {
+            n: 1,
+            total: 3,
+            name: "检测系统 Python".into(),
+        },
+    );
     let system_python = if venv.exists() {
         Some(venv.clone())
     } else {
@@ -678,6 +687,14 @@ async fn setup_env(app: AppHandle) -> Result<bool, String> {
     emit_log(&app, "info", format!("使用 Python: {}", system_python.display()));
 
     // 2. 建 venv（可能耗时 10-30 秒，放 blocking 线程）
+    let _ = app.emit(
+        "setup-stage",
+        &StageEvent {
+            n: 2,
+            total: 3,
+            name: "创建虚拟环境(约 10-30 秒)".into(),
+        },
+    );
     if !venv.exists() {
         emit_log(&app, "info", "创建虚拟环境 .venv ...".into());
         let sys = system_python.clone();
@@ -712,6 +729,14 @@ async fn setup_env(app: AppHandle) -> Result<bool, String> {
     }
 
     // 3. pip 安装(清华镜像,后台线程流式输出)
+    let _ = app.emit(
+        "setup-stage",
+        &StageEvent {
+            n: 3,
+            total: 3,
+            name: "安装依赖包(首次约 1-3 分钟,取决于网络)".into(),
+        },
+    );
     let app2 = app.clone();
     let req2 = req.clone();
     let root2 = root.clone();
@@ -924,7 +949,9 @@ async fn health_check() -> Result<HealthResult, String> {
 // ── 壳子自更新 ─────────────────────────────────────────
 /// 一键自动更新：共享盘 <share>\app\ 下有 app-version.txt + *-setup.exe
 /// 1. 比对版本(不复用 check_app_update 的 None 语义,需区分「已最新」与「未找到」)
-/// 2. 按修改时间取最新安装包 → 拷到临时目录 → 隐藏 cmd 延迟静默安装 → 装完重开 → 退出
+/// 2. 按修改时间取最新安装包 → 拷到临时目录 → 生成隐藏 cmd 批处理(全 ASCII,
+///    运行时路径走环境变量;轮询等旧进程退出 → 静默安装 → 写退出码
+///    update-result.txt → 重开新 exe → 自删)→ 本进程延迟退出
 #[tauri::command]
 async fn self_update(app: AppHandle) -> Result<String, String> {
     // 1. 版本比对
@@ -973,32 +1000,90 @@ async fn self_update(app: AppHandle) -> Result<String, String> {
     let target = std::env::temp_dir().join("KanbanPipeline-update.exe");
     fs::copy(&setup_exe, &target).map_err(|e| format!("拷贝安装包失败: {e}"))?;
 
-    // 4. 隐藏 cmd：等 2s(等本进程退出) → 静默安装 → 装完重新启动新 exe
+    // 4. 生成隐藏 cmd 批处理脚本:先轮询等旧进程退出(最多 60 秒,超时强杀)→
+    //    静默安装 NSIS → 写退出码到 update-result.txt(下次启动 take_update_result
+    //    读取后反馈给前端)→ 重新启动新 exe → 自删。
     //    重开路径必须用 current_exe(当前运行的 exe 自己):实测 Tauri NSIS currentUser
     //    装到 %LOCALAPPDATA%\KanbanPipeline(无 Programs 层),之前硬编码错误路径
-    //    导致装完静默失败、用户以为"什么都没弹出来"
+    //    导致装完静默失败、用户以为"什么都没弹出来"。
+    //    编码:批处理必须 ASCII-only —— cmd 按系统代码页(中文 Windows 为 GBK/936)
+    //    解析脚本文件,直接写进 .cmd 的中文路径(如 %LOCALAPPDATA%\看板助手\)会变
+    //    乱码,导致 start 重开失败。三个运行时路径(安装包/结果文件/重开 exe)一律
+    //    不写进模板,改由本进程 Command::env() 传入(Windows 环境块是 UTF-16,无编码
+    //    损失),批处理内用 %KANBAN_SETUP%/%KANBAN_RESULT%/%KANBAN_RELAUNCH% 引用。
+    //    时序:轮询 tasklist 等旧进程真正退出后再安装(用 ping 睡 1 秒,不用 timeout
+    //    —— 无控制台时 timeout 会挂)。上限用单行 if 判断,避免括号块内 %WAITCNT%
+    //    按解析期展开导致 60 次兜底永不触发。
     let temp_exe = target.to_string_lossy().into_owned();
     let current_exe = std::env::current_exe()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let script = format!(
-        "ping -n 3 127.0.0.1 >nul && \"{temp_exe}\" /S && start \"\" \"{current_exe}\""
-    );
+    let result_file = data_root().join("update-result.txt");
+    let cmd_file = std::env::temp_dir().join("KanbanPipeline-update.cmd");
+    let script_lines = [
+        "@echo off",
+        "set /a WAITCNT=0",
+        ":waitloop",
+        "tasklist /FI \"IMAGENAME eq kanban-runner.exe\" 2>nul | find /I \"kanban-runner.exe\" >nul",
+        "if not %ERRORLEVEL%==0 goto install",
+        "ping -n 2 127.0.0.1 >nul",
+        "set /a WAITCNT+=1",
+        "if %WAITCNT% GEQ 60 taskkill /IM kanban-runner.exe /F >nul 2>&1",
+        "goto waitloop",
+        ":install",
+        "\"%KANBAN_SETUP%\" /S",
+        "set EC=%ERRORLEVEL%",
+        "echo %EC%>\"%KANBAN_RESULT%\"",
+        "start \"\" \"%KANBAN_RELAUNCH%\"",
+        "del \"%~f0\"",
+    ]
+    .join("\r\n");
+    // 必须 CRLF 行尾:cmd 批处理对 LF-only 的解析有坑(标签跳转可能出错)
+    fs::write(&cmd_file, script_lines).map_err(|e| format!("生成更新脚本失败: {e}"))?;
+    let cmd_file_str = cmd_file.to_string_lossy().into_owned();
     let mut cmd = Command::new("cmd");
-    cmd.args(["/c", &script]);
+    cmd.arg("/c")
+        .arg(&cmd_file_str)
+        .env("KANBAN_SETUP", &temp_exe)
+        .env("KANBAN_RESULT", &result_file)
+        .env("KANBAN_RELAUNCH", &current_exe);
     no_window(&mut cmd);
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     cmd.spawn().map_err(|e| format!("启动更新程序失败: {e}"))?;
 
-    // 5. 先让 IPC 响应送达前端,再延迟退出本进程
+    // 5. 先让 IPC 响应送达前端,再延迟退出本进程。
+    //    延迟 2 秒而非 500ms:给前端更新遮罩至少约 2 秒的可见时间,
+    //    让用户看清"应用即将关闭安装新版本",不误以为有弹窗被自动关掉。
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::thread::sleep(std::time::Duration::from_millis(2000));
         app.exit(0);
     });
 
     Ok("正在更新:应用将关闭并自动安装新版本,完成后会自动重新打开".into())
+}
+
+/// 读取上次自更新结果(update-result.txt),供应用重启后向前端反馈"更新成功/失败"。
+/// 文件由 self_update 生成的批处理写入;本命令读取后即删除,保证只反馈一次。
+#[tauri::command]
+async fn take_update_result() -> Result<Option<String>, String> {
+    let result_file = data_root().join("update-result.txt");
+    let content = match fs::read_to_string(&result_file) {
+        Ok(c) => c,
+        // 不存在 → 没有发生过更新(或正常返回 None)
+        Err(_) => return Ok(None),
+    };
+    // 读完即删,防止重启后重复提示
+    let _ = fs::remove_file(&result_file);
+    match content.trim().parse::<i32>() {
+        // 0 = NSIS 静默安装成功
+        Ok(0) => Ok(Some("ok".into())),
+        // 非零退出码:安装失败,把退出码带给前端
+        Ok(code) => Ok(Some(format!("fail:{code}"))),
+        // 内容无法解析也按失败处理(仍删文件,避免反复提示)
+        Err(_) => Ok(Some("fail:invalid".into())),
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1045,7 +1130,8 @@ pub fn run() {
             open_folder,
             setup_env,
             health_check,
-            self_update
+            self_update,
+            take_update_result
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

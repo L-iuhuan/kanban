@@ -149,3 +149,44 @@ body{background:var(--bg-image)}
 /* 「更新代码」检测到新代码时的呼吸高亮 */
 .btn.attention{animation:pulse-sync 1.6s ease-in-out infinite;border-color:var(--accent)}
 @keyframes pulse-sync{0%,100%{box-shadow:0 0 0 0 rgba(123,108,255,0)}50%{box-shadow:0 0 12px 2px rgba(123,108,255,.55)}}
+
+/* 小主按钮(设置内联「立即更新」) */
+.mini-btn.primary{background:linear-gradient(135deg,var(--accent),#5745d8);border:none;color:#fff;font-weight:600}
+.mini-btn.primary:hover:not(:disabled){filter:brightness(1.12)}
+
+/* 更新横幅提高层级,确保浮在设置弹层之上 */
+#update-banner{position:relative;z-index:60}
+
+/* 全屏更新遮罩 */
+.update-overlay{z-index:70;backdrop-filter:blur(4px)}
+.update-card{width:380px;text-align:center}
+.update-card h3{margin-bottom:18px;justify-content:center}
+.update-steps{list-style:none;display:flex;flex-direction:column;gap:12px;margin:20px 0;text-align:left;font-size:13px;color:var(--text-dim)}
+.update-steps li{display:flex;align-items:center;gap:10px;transition:color .2s}
+.update-steps li .dot{width:18px;height:18px;border-radius:50%;border:2px solid var(--line);display:flex;align-items:center;justify-content:center;flex-shrink:0;position:relative}
+.update-steps li.active{color:var(--text);font-weight:600}
+.update-steps li.active .dot{border-color:var(--accent-2);background:rgba(56,200,255,.12)}
+.update-steps li.active .dot::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent-2);animation:spin 1.2s linear infinite}
+.update-steps li.done{color:var(--ok)}
+.update-steps li.done .dot{border-color:var(--ok);background:rgba(52,211,153,.12)}
+.update-steps li.done .dot::after{content:"";width:6px;height:9px;border:solid var(--ok);border-width:0 2px 2px 0;transform:rotate(45deg);margin-bottom:2px}
+.update-note{font-size:12px;color:var(--text-dim);margin-top:18px}
+
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+
+/* 设置内联更新状态文案 */
+.update-hint{font-size:12px;color:var(--text-dim);margin-top:6px;min-height:17px}
+
+/* 首次环境准备进度 */
+.setup-progress{margin-top:14px;padding-top:14px;border-top:1px solid var(--card-border);animation:setup-in .25s ease}
+@keyframes setup-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.setup-progress-head{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;font-weight:600;color:var(--text);margin-bottom:6px}
+.setup-progress-name{font-size:12px;color:var(--text-dim);margin-bottom:8px;min-height:17px}
+.setup-progress-bar{height:7px;background:var(--track);border-radius:4px;overflow:hidden}
+.setup-progress-fill{height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent-2));border-radius:4px;transition:width .3s ease}
+.setup-progress-fill.failed{background:var(--err)}
+
+@media (prefers-reduced-motion:reduce){
+  .update-steps li.active .dot::after{animation:none}
+  .setup-progress,.setup-progress-fill{transition:none;animation:none}
+}

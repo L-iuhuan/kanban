@@ -437,35 +437,73 @@ byId("btn-sync").addEventListener("click", async () => {
   if (r && r.ok) await refreshStatus();
 });
 
-// 一键自动更新:从共享盘取安装包静默安装,完成后自动重启到新版本
-byId("btn-update").addEventListener("click", async () => {
-  const btn = byId<HTMLButtonElement>("btn-update");
-  btn.disabled = true;
-  btn.textContent = "正在更新…";
+function markUpdateStep(n: number) {
+  byId("update-steps").querySelectorAll("li").forEach((li) => {
+    const s = Number(li.getAttribute("data-step"));
+    li.classList.remove("active", "done");
+    if (s < n) li.classList.add("done");
+    else if (s === n) li.classList.add("active");
+  });
+}
+
+async function startSelfUpdate(targetVer: string) {
+  byId<HTMLElement>("settings-modal").hidden = true;
+  byIdText("update-target-ver", targetVer);
+  byId<HTMLElement>("update-overlay").hidden = false;
+  markUpdateStep(1);
   appendLog("info", "开始自动更新:正在从共享盘获取安装包…");
   try {
     const msg = await invoke<string>("self_update");
     appendLog("ok", msg);
+    markUpdateStep(2);
   } catch (e) {
+    byId<HTMLElement>("update-overlay").hidden = true;
     appendLog("error", "自动更新失败: " + e);
-    btn.disabled = false;
-    btn.textContent = "立即更新";
+    showBanner("自动更新失败: " + e);
   }
+}
+
+// 一键自动更新:从共享盘取安装包静默安装,完成后自动重启到新版本
+byId("btn-update").addEventListener("click", async () => {
+  const s = await refreshStatus();
+  const ver = s?.update_available ?? "";
+  if (!ver) return;
+  void startSelfUpdate(ver);
 });
 byId("btn-update-close").addEventListener("click", () => {
   updateNoticeShown = true;
   byId("update-banner").hidden = true;
 });
 
-// 设置里的「检查更新」:刷新状态,有新版时弹出蓝色更新横幅
+function renderInlineUpdate(s: Status | null) {
+  const inlineBtn = byId<HTMLButtonElement>("btn-inline-update");
+  const hint = byId<HTMLElement>("update-hint");
+  if (s && s.update_available) {
+    inlineBtn.hidden = false;
+    inlineBtn.textContent = "立即更新 v" + s.update_available;
+    hint.hidden = false;
+    hint.textContent = "当前 v" + s.app_version + " → 发现 v" + s.update_available;
+  } else {
+    inlineBtn.hidden = true;
+    hint.hidden = false;
+    hint.textContent = "已是最新 (v" + (s ? s.app_version : "?") + ")";
+  }
+}
+
+// 设置里的「检查更新」:刷新状态,有新版时在同一行显示主按钮
 byId("btn-check-update").addEventListener("click", async () => {
   appendLog("info", "正在检查更新…");
   const s = await refreshStatus();
+  renderInlineUpdate(s);
   if (s && s.update_available) {
-    appendLog("ok", "发现新版本 v" + s.update_available + ",请点击上方蓝色横幅的「立即更新」");
+    appendLog("ok", "发现新版本 v" + s.update_available);
   } else {
     appendLog("ok", "已是最新版本 (v" + (s ? s.app_version : "?") + ")");
   }
+});
+byId("btn-inline-update").addEventListener("click", () => {
+  const ver = byId("btn-inline-update").textContent?.replace("立即更新 v", "") ?? "";
+  if (ver) void startSelfUpdate(ver);
 });
 
 // ── 打开看板/产物 ─────────────────────────────────────
@@ -588,6 +626,10 @@ async function refreshStatus() {
       byIdText("update-text", "发现新版本 v" + s.update_available + ",可一键自动更新(约 1 分钟,无需卸载)");
       byId("update-banner").hidden = false;
     }
+    if (!s.update_available) {
+      byId<HTMLButtonElement>("btn-inline-update").hidden = true;
+      byId<HTMLElement>("update-hint").hidden = true;
+    }
     if (s.env_ok) {
       appendLog("ok", "运行环境就绪: " + s.python);
     } else if (s.synced) {
@@ -596,6 +638,11 @@ async function refreshStatus() {
         setupInProgress = true;
         setAppState("setting-up");
         setDetail("首次安装运行环境(约 5-10 分钟,仅一次,之后启动秒开)…");
+        byId<HTMLElement>("setup-progress").hidden = false;
+        byIdText("setup-progress-count", "0/3");
+        byIdText("setup-progress-name", "准备中…");
+        byId<HTMLElement>("setup-progress-fill").style.width = "0%";
+        byId<HTMLElement>("setup-progress-fill").classList.remove("failed");
         void invoke("setup_env").catch((e) => {
           // 后端启动失败不会发 setup-done,必须在此复位,否则会一直卡在 setting-up
           setupInProgress = false;
@@ -698,6 +745,13 @@ listen<SyncResult>("sync-done", (e) => {
   setVersionBadge(e.payload.version);
   appendLog("info", "版本: " + e.payload.version);
 });
+listen<{ n: number; total: number; name: string }>("setup-stage", (e) => {
+  byId<HTMLElement>("setup-progress").hidden = false;
+  byIdText("setup-progress-count", e.payload.n + "/" + e.payload.total);
+  byIdText("setup-progress-name", e.payload.name);
+  (byId<HTMLElement>("setup-progress-fill").style as any).width =
+    (e.payload.n / e.payload.total * 100) + "%";
+});
 listen<boolean>("setup-done", (e) => {
   const ok = e.payload;
   setupInProgress = false;
@@ -705,9 +759,20 @@ listen<boolean>("setup-done", (e) => {
   setAppState(ok ? "idle" : "failed");
   void refreshStatus();
   if (ok) {
+    byId<HTMLElement>("setup-progress-fill").style.width = "100%";
+    byIdText("setup-progress-name", "环境准备完成");
+    window.setTimeout(() => {
+      byId<HTMLElement>("setup-progress").hidden = true;
+      byId<HTMLElement>("setup-progress-fill").style.width = "0%";
+      byIdText("setup-progress-name", "");
+      byId<HTMLElement>("setup-progress-fill").classList.remove("failed");
+    }, 2000);
     void invoke<HealthResult>("health_check")
       .then((h) => appendLog(h.ok ? "ok" : "warn", "环境检查: " + h.message))
       .catch((err) => appendLog("warn", "环境检查失败: " + err));
+  } else {
+    byIdText("setup-progress-name", "环境准备失败,请查看日志");
+    byId<HTMLElement>("setup-progress-fill").classList.add("failed");
   }
 });
 
@@ -719,6 +784,20 @@ async function init() {
   const cfg = await invoke<AppConfig>("get_config").catch(() => null);
   if (cfg) {
     cfgCache = cfg;
+  }
+  // 启动时反馈上次更新结果
+  try {
+    const r = await invoke<string | null>("take_update_result");
+    if (r === "ok") {
+      appendLog("ok", "已成功更新到当前版本");
+      showBanner("已成功更新到当前版本");
+      window.setTimeout(() => hideBanner(), 5000);
+    } else if (r && r.startsWith("fail:")) {
+      const code = r.slice(5);
+      showBanner("上次自动更新失败(安装器退出码 " + code + "),已回退旧版,可重试");
+    }
+  } catch {
+    // 忽略
   }
   const s = await refreshStatus();
   if (!cfg || !cfg.share_path) {
