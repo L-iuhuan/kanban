@@ -1087,7 +1087,9 @@ async fn self_update(app: AppHandle) -> Result<String, String> {
         ":install",
         "\"%KANBAN_SETUP%\" /S",
         "set EC=%ERRORLEVEL%",
-        "echo %EC%>\"%KANBAN_RESULT%\"",
+        // 重定向必须放句首:echo %EC%>file 在 EC 为单数字(0/1/2)时会被 cmd 解析成
+        // 句柄重定向(0>/1>/2>),文件被写成空的 -> 启动回执误报 fail:invalid
+        ">\"%KANBAN_RESULT%\" echo %EC%",
         "start \"\" \"%KANBAN_RELAUNCH%\"",
         "del \"%~f0\"",
     ]

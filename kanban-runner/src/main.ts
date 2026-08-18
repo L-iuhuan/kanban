@@ -127,9 +127,12 @@ function appendLog(level: string, text: string, isStage = false) {
   if (nearBottom) logBody.scrollTop = logBody.scrollHeight;
 }
 
-function showBanner(text: string) {
+function showBanner(text: string, kind: "err" | "info" | "ok" = "err") {
+  const el = byId("error-banner");
+  el.classList.remove("info", "ok");
+  if (kind !== "err") el.classList.add(kind);
   byId("banner-text").textContent = text;
-  byId("error-banner").hidden = false;
+  el.hidden = false;
 }
 function hideBanner() {
   byId("error-banner").hidden = true;
@@ -814,11 +817,13 @@ async function init() {
     const r = await invoke<string | null>("take_update_result");
     if (r === "ok") {
       appendLog("ok", "已成功更新到当前版本");
-      showBanner("已成功更新到当前版本");
+      showBanner("已成功更新到当前版本", "ok");
       window.setTimeout(() => hideBanner(), 5000);
     } else if (r && r.startsWith("fail:")) {
       const code = r.slice(5);
-      showBanner("上次自动更新失败(安装器退出码 " + code + "),已回退旧版,可重试");
+      const msg = "上次自动更新失败(安装器退出码 " + code + "),已回退旧版,可重试";
+      appendLog("error", msg);
+      showBanner(msg);
     }
   } catch {
     // 忽略
