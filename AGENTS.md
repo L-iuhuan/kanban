@@ -15,6 +15,9 @@
 ## 本机环境怪癖(重要,不同于常规机器,已实测确认)
 
 - **远端主分支是 `main`,本地分支也已改为 `main`**(直接 `git pull` 即可)。HTTPS fetch/push GitHub 经常被截断(schannel: server closed abruptly / early EOF),解法:加 `-c http.version=HTTP/1.1` 重试,如 `git -c http.version=HTTP/1.1 fetch origin main`。`.git-tools/` 里的 isomorphic-git 是更早的绕过方案,现作备用。
+- **Git 标准版已装(2026-08-24)**:Git for Windows 2.55.0,用户级安装 `%LOCALAPPDATA%\Programs\Git`,已写入用户 PATH(新开终端直接 `git`;装之前就开着的终端要重开才认)。`.workbuddy` 的 PortableGit 保留未动(workbuddy 自用)。
+- **凭证链路**:标准版自带 GCM(`credential.helper=manager`),Windows 凭据库存有 `git:https://github.com`(L-iuhuan 的 PAT),交互/非交互均正常。注意:PortableGit 的 `helper-selector` 在无界面环境会挂死——agent 代跑推送时要么用标准版 git,要么显式 `-c credential.helper=<git-credential-manager.exe 完整路径>` + `GCM_INTERACTIVE=never` 绕过。
+- **SSH 公钥已登记**(2026-08-24):`~/.ssh/id_ed25519.pub` 已加到 GitHub 账号(账号级,所有仓库可用)。但公司网络对 github 的 22 与 443(ssh.github.com)均常被重置,主通路仍是 HTTPS+HTTP/1.1,SSH 仅作网络允许时的备用。
 - **cargo/rustc 不在 PATH 上**:Rust 工具链由 puccinialin 管理(rustup 缓存),手动跑 cargo 前需设置:
   ```powershell
   $tc = "C:\Users\910373\AppData\Local\puccinialin\puccinialin\Cache"
