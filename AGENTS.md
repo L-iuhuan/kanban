@@ -43,3 +43,16 @@
 - 前端每用一个 API(窗口控制、剪贴板、对话框…),必须在 `src-tauri/capabilities/default.json` 显式授权,否则运行时报 not allowed。
 - 官方插件需三处同时安装:npm 包 + Cargo crate + Rust 侧 `.plugin(xxx::init())`。
 - 验证方式:无自动化测试,改完后 `cargo tauri build`(或 dev 跑起来)确认编译与基本行为通过。
+
+## 发布核对清单
+
+> 批次 W2 起,`tools/publish_to_share.ps1` 自带「共享盘最新自检 + 版本号复读验证」;共享盘根路径为**单点配置** `share_config.json`(不再硬编码在脚本里)。发版前逐项核对:
+
+1. **改平台代码(流水线 run_chain.py / processing / dashboard 等)** → 跑 `tools\publish_to_share.ps1`。
+   - 脚本会先自检:本地 git HEAD vs 共享盘 `code/version.txt` 哈希;若共享盘落后会打印 `share=<旧> local=<新>`,否则提示"共享盘已是最新"并询问是否强制发布(非交互环境加 `-Force` 跳过询问)。
+   - **确认 version.txt 是 `v<hash> @ …` 而不是 `vnogit @ …`**——若为 vnogit,说明 git 解析失败(子进程 PATH 不含刚装的 git),脚本已内置回落到 `%LOCALAPPDATA%\Programs\Git\cmd\git.exe` 全路径,仍失败则需排查。
+2. **改壳子(kanban-runner / lib.rs / 前端)** → `cargo tauri build --bundles nsis`,再 `publish_to_share.ps1 -AppInstaller <setup.exe 路径> -AppVersion <版本号>`。
+3. **共享盘路径变更** → 必须**同时**改 `share_config.json` 的 `share_root` 与 `kanban-runner/src-tauri/src/lib.rs` 的 `DEFAULT_SHARE_PATH` **两处**,并核对一致(发版清单项)。
+4. **每次发布后**复读 `共享盘\code\version.txt`,确认内容为 `v<本地 HEAD 短哈希> @ <日期时间>`(脚本第 2 步已做复读校验,仍建议人工扫一眼)。
+
+> 备份路径:共享盘根 = `share_config.json`(脚本端) = `lib.rs DEFAULT_SHARE_PATH`(壳端)。改路径只改一处 = 发布与客户端读盘不一致,视为缺陷。

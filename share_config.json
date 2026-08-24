@@ -1,0 +1,4 @@
+{
+  "share_root": "\\\\192.168.8.3\\财务部\\办公软件\\SoftwareUpdate\\数据分析看板",
+  "note": "壳端 lib.rs DEFAULT_SHARE_PATH 发版时需与此一致"
+}
