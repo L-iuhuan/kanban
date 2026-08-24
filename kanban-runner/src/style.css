@@ -95,7 +95,10 @@ body{background:var(--bg-image)}
 .mini-btn{font-size:11.5px;color:var(--text-dim);background:var(--btn-bg);border:1px solid var(--card-border);border-radius:6px;padding:3px 9px;cursor:pointer;display:inline-flex;align-items:center;gap:5px}
 .mini-btn:hover{color:var(--text);background:var(--btn-hover)}
 .log-body{flex:1;overflow-y:auto;font-family:var(--mono);font-size:12px;line-height:1.65;background:var(--inset-bg);border:1px solid var(--card-border);border-radius:9px;padding:9px 11px;min-height:0}
-.log-empty{color:var(--log-empty)}
+.log-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;height:100%;color:var(--log-empty);text-align:center}
+.log-empty-icon{display:flex;opacity:.8}
+.log-empty-title{font-size:12.5px}
+.log-empty-sub{font-size:11px;opacity:.75}
 .log-line{white-space:pre-wrap;word-break:break-all}
 .log-line .ts{color:var(--text-faint);margin-right:8px}
 .log-line.info{color:var(--log-text)}
@@ -189,7 +192,22 @@ body{background:var(--bg-image)}
 .setup-progress-fill{height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent-2));border-radius:4px;transition:width .3s ease}
 .setup-progress-fill.failed{background:var(--err)}
 
+/* Toast 轻提示 */
+.toast-zone{position:fixed;right:20px;bottom:20px;display:flex;flex-direction:column;gap:8px;z-index:65;pointer-events:none}
+.toast{max-width:320px;display:flex;align-items:center;gap:8px;padding:9px 14px;font-size:12.5px;color:var(--text);background:var(--modal-bg);border:1px solid var(--card-border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.35);backdrop-filter:blur(14px);opacity:0;transform:translateX(20px);transition:opacity .22s ease,transform .22s ease}
+.toast.enter{opacity:1;transform:none}
+.toast.exit{opacity:0;transform:translateX(10px);transition:opacity .2s,transform .2s}
+.toast .t-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.toast.ok .t-dot{background:var(--ok);box-shadow:0 0 6px var(--ok)}
+.toast.info .t-dot{background:var(--accent-2);box-shadow:0 0 6px var(--accent-2)}
+.toast.err .t-dot{background:var(--err)}
+
+/* 主题切换瞬间禁用所有过渡:带 hover 过渡的元素(卡片/按钮/步骤圆圈)否则会比
+   无过渡区域慢 150-200ms,视觉上"不同步"。双 rAF 后移除,不影响平时悬停过渡 */
+html.theme-switching *{transition:none !important}
+
 @media (prefers-reduced-motion:reduce){
   .update-steps li.active .dot::after{animation:none}
   .setup-progress,.setup-progress-fill{transition:none;animation:none}
+  .toast,.toast.exit{transition:none;animation:none}
 }

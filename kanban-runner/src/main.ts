@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -71,8 +71,12 @@ function ts(): string {
 // ── 主题(浅色/深色,默认浅色,localStorage 记忆) ──
 const rootEl = document.documentElement;
 function applyTheme(t: "light" | "dark") {
+  rootEl.classList.add("theme-switching");
   rootEl.dataset.theme = t;
   localStorage.setItem("theme", t);
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => rootEl.classList.remove("theme-switching"))
+  );
 }
 applyTheme(localStorage.getItem("theme") === "dark" ? "dark" : "light");
 
@@ -136,6 +140,30 @@ function showBanner(text: string, kind: "err" | "info" | "ok" = "err") {
 }
 function hideBanner() {
   byId("error-banner").hidden = true;
+}
+function showToast(text: string, kind: "ok" | "info" | "err" = "info") {
+  const zone = document.getElementById("toast-zone");
+  if (!zone) return;
+  const toast = document.createElement("div");
+  toast.className = "toast " + kind;
+  const dot = document.createElement("span");
+  dot.className = "t-dot";
+  const msg = document.createElement("span");
+  msg.textContent = text;
+  toast.appendChild(dot);
+  toast.appendChild(msg);
+  while (zone.children.length >= 4) {
+    zone.removeChild(zone.firstElementChild!);
+  }
+  zone.appendChild(toast);
+  void toast.offsetHeight;
+  toast.classList.add("enter");
+  window.setTimeout(() => {
+    toast.classList.add("exit");
+    window.setTimeout(() => {
+      if (toast.parentNode === zone) zone.removeChild(toast);
+    }, 220);
+  }, 2800);
 }
 
 // ── 阶段 stepper(按 pipeline-stage 事件动态生成,不认死阶段数/名称) ──
@@ -295,6 +323,7 @@ byId("btn-clear-file").addEventListener("click", (e) => {
   e.stopPropagation();
   setDataFile(null);
   appendLog("info", "已移除数据文件");
+  showToast("已移除数据文件", "info");
 });
 function byIdText(id: string, t: string) {
   byId(id).textContent = t;
@@ -544,12 +573,22 @@ byId("btn-copy-log").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(lines);
     appendLog("ok", "日志已复制到剪贴板");
+    showToast("日志已复制到剪贴板", "ok");
   } catch {
     appendLog("warn", "复制失败,请手动全选复制");
+    showToast("复制失败,请手动全选复制", "err");
   }
 });
+function renderLogEmpty() {
+  logBody.innerHTML =
+    '<div class="log-empty">' +
+    '<span class="log-empty-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span>' +
+    '<span class="log-empty-title">日志将在这里实时显示</span>' +
+    '<span class="log-empty-sub">运行、同步、更新的过程都会记录在这里</span>' +
+    "</div>";
+}
 byId("btn-clear-log").addEventListener("click", () => {
-  logBody.innerHTML = '<div class="log-empty">日志将在这里实时显示</div>';
+  renderLogEmpty();
   logLines = 0;
 });
 byId("banner-copy").addEventListener("click", () =>
@@ -578,6 +617,7 @@ byId("btn-save-config").addEventListener("click", async () => {
     });
     cfgCache = { share_path: sharePath, auto_sync: autoSync };
     appendLog("ok", "设置已保存");
+    showToast("设置已保存", "ok");
     settingsModal.hidden = true;
     if (sharePath) {
       await runSync(true);
@@ -585,6 +625,15 @@ byId("btn-save-config").addEventListener("click", async () => {
     }
   } catch (e) {
     appendLog("error", "保存失败: " + e);
+  }
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !settingsModal.hidden) settingsModal.hidden = true;
+});
+byId("share-path-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    byId("btn-save-config").click();
   }
 });
 
@@ -876,3 +925,12 @@ async function init() {
 }
 
 void init();
+
+// 首帧绘制完成后通知壳显示窗口(lib.rs 监听 frontend-ready 后才 show,
+// 配合 visible:false 创建,消除启动白闪)。双 rAF 保证至少一帧已实际渲染。
+// 壳侧另有 3.5 秒兜底显示,此处失败(emit 异常)也不会导致窗口永不出现。
+requestAnimationFrame(() =>
+  requestAnimationFrame(() => {
+    void emit("frontend-ready");
+  })
+);

@@ -1149,6 +1149,10 @@ pub fn run() {
             // 启动时按主显示器尺寸把窗口设为横版:宽 62%、高 62%,居中;
             // 不小于 tauri.conf.json 的最小尺寸(960x660)。
             // 失败(拿不到显示器信息)时静默回退到 tauri.conf.json 的固定尺寸。
+            // 窗口以 visible:false 创建(见 tauri.conf.json),消除「先 1280x800 再放大
+            // 到屏幕 62%」的跳变;显示时机进一步推迟到前端首帧绘制完成(防 WebView2
+            // 白闪):前端 main.ts 首帧后 emit("frontend-ready"),此处监听后再 show。
+            // 3.5 秒兜底显示:前端异常(白屏/脚本报错)时窗口不至于永不出现。
             use tauri::Manager;
             if let Some(w) = app.get_webview_window("main") {
                 if let Ok(Some(m)) = w.current_monitor() {
@@ -1161,6 +1165,17 @@ pub fn run() {
                     ));
                     let _ = w.center();
                 }
+                use tauri::Listener;
+                let w2 = w.clone();
+                app.listen("frontend-ready", move |_| {
+                    let _ = w2.show();
+                    let _ = w2.set_focus();
+                });
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(3500));
+                    // show() 幂等:与 frontend-ready 竞争时最多多调一次,无害
+                    let _ = w.show();
+                });
             }
             Ok(())
         })
