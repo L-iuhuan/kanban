@@ -33,7 +33,9 @@ if (Test-Path $personnel) {
 }
 
 Write-Output "[1/4] 同步代码: $SourceDir -> $dst"
-robocopy $SourceDir $dst /MIR /XD .git output data __pycache__ .venv .pytest_cache test node_modules /XF *.pyc *.log "~`$*" /R:1 /W:1 /NFL /NDL /NJH /NP /MT:8 | Out-Null
+# 共享安全(2026-08-24 用户拍板):共享盘只出核心代码——排除含全量业务数据的看板产物(dashboard_a.html)、
+# 预聚合缓存(preagg.json)、快照仓(data_warehouse)。历史上 dashboard_a.html 曾被同步,已手工清理。
+robocopy $SourceDir $dst /MIR /XD .git output data data_warehouse __pycache__ .venv .pytest_cache test node_modules /XF *.pyc *.log dashboard_a.html preagg.json "~`$*" /R:1 /W:1 /NFL /NDL /NJH /NP /MT:8 | Out-Null
 if ($LASTEXITCODE -gt 7) {
   Write-Error "代码同步失败 (robocopy 退出码 $LASTEXITCODE)"
   exit 1
