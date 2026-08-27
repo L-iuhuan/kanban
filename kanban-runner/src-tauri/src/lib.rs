@@ -48,6 +48,14 @@ struct SyncResult {
 }
 
 #[derive(Serialize, Clone)]
+struct ShareDataFile {
+    name: String,
+    size_mb: f64,
+    /// 修改时间(本地展示用,格式 YYYY-MM-DD HH:MM)
+    modified: String,
+}
+
+#[derive(Serialize, Clone)]
 struct Status {
     /// 共享盘 code 目录存在(可同步)
     share_ok: bool,
@@ -293,6 +301,197 @@ fn version_newer(remote: &str, current: &str) -> bool {
         }
     }
     false
+}
+
+// ── 共享盘数据拉取 ────────────────────────────────────
+// 财务每月往共享盘 <share>\data\ 投放「财务分析-X月.xlsx」(约 224MB,DSE 密文)。
+// 拉到本地 data_root\data\ 后由现有流水线 COM 自动解密;两个命令的 SMB/UNC
+// 同步 IO 都放 spawn_blocking,避免占住 async worker(共享盘不可达时单次超时可达数十秒)。
+
+// 标准库不提供 SystemTime → 本地时区的转换,Windows 下直接调 kernel32 的
+// FileTimeToLocalFileTime + FileTimeToSystemTime(纯系统调用,不新增依赖);
+// 非 Windows 编译时回落 UTC 转换(仅保证可移植编译,部署只面向 Windows)。
+#[cfg(windows)]
+mod local_time {
+    #[repr(C)]
+    struct FileTime {
+        dw_low: u32,
+        dw_high: u32,
+    }
+    #[repr(C)]
+    struct SystemTime {
+        year: u16,
+        month: u16,
+        day_of_week: u16,
+        day: u16,
+        hour: u16,
+        minute: u16,
+        second: u16,
+        milliseconds: u16,
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn FileTimeToLocalFileTime(
+            lp_file_time: *const FileTime,
+            lp_local_file_time: *mut FileTime,
+        ) -> i32;
+        fn FileTimeToSystemTime(lp_file_time: *const FileTime, lp_system_time: *mut SystemTime) -> i32;
+    }
+    /// UNIX 秒 → 本地 (年,月,日,时,分);失败(极少,DST 转换异常等)返回 None
+    pub fn local_civil(secs: i64) -> Option<(u32, u32, u32, u32, u32)> {
+        // UNIX 秒 → FILETIME(1601-01-01 起 100 纳秒,64 位无符号);用 i128 中间量防溢出
+        let ft100ns: i128 = (secs as i128 + 11_644_473_600) * 10_000_000;
+        if ft100ns < 0 {
+            return None;
+        }
+        let ft = FileTime {
+            dw_low: (ft100ns as u64 & 0xFFFF_FFFF) as u32,
+            dw_high: ((ft100ns as u64 >> 32) & 0xFFFF_FFFF) as u32,
+        };
+        let mut local = FileTime { dw_low: 0, dw_high: 0 };
+        let mut st = SystemTime {
+            year: 0,
+            month: 0,
+            day_of_week: 0,
+            day: 0,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            milliseconds: 0,
+        };
+        // 两个 API 均返回 BOOL,非 0 表示成功
+        let ok = unsafe {
+            FileTimeToLocalFileTime(&ft, &mut local) != 0 && FileTimeToSystemTime(&local, &mut st) != 0
+        };
+        if !ok {
+            return None;
+        }
+        Some((
+            st.year as u32,
+            st.month as u32,
+            st.day as u32,
+            st.hour as u32,
+            st.minute as u32,
+        ))
+    }
+}
+
+/// 无系统 API 时回落的 UTC 转换(非 Windows 编译路径);Howard Hinnant 的 days↔civil 算法
+fn utc_civil(secs: i64) -> (u32, u32, u32, u32, u32) {
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400); // [0, 86399]
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    (y as u32, m, d, (rem / 3600) as u32, ((rem % 3600) / 60) as u32)
+}
+
+/// 把 mtime 格式化为 "YYYY-MM-DD HH:MM"(本地时区,展示用)
+fn format_mtime(t: std::time::SystemTime) -> String {
+    let secs = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    #[cfg(windows)]
+    let (y, mo, d, h, mi) = local_time::local_civil(secs).unwrap_or_else(|| utc_civil(secs));
+    #[cfg(not(windows))]
+    let (y, mo, d, h, mi) = utc_civil(secs);
+    format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}")
+}
+
+/// 列出共享盘 data\ 目录下的 Excel 数据文件,按修改时间倒序(最新在前)。
+/// 目录不存在或不可达 → 财务可能还没投放,返回空列表而非错误。
+#[tauri::command]
+async fn list_share_data() -> Result<Vec<ShareDataFile>, String> {
+    let cfg = load_config();
+    let data_dir = PathBuf::from(cfg.share_path.trim()).join("data");
+    tauri::async_runtime::spawn_blocking(move || {
+        if !data_dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut files: Vec<(std::time::SystemTime, ShareDataFile)> = Vec::new();
+        for entry in fs::read_dir(&data_dir).map_err(|e| format!("读取共享盘 data 目录失败: {e}"))? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            // 只收 .xlsx,排除 Excel 的 ~$ 开头临时文件
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) if n.ends_with(".xlsx") && !n.starts_with("~$") => n.to_string(),
+                _ => continue,
+            };
+            let meta = entry.metadata().map_err(|e| e.to_string())?;
+            let size_mb = meta.len() as f64 / (1024.0 * 1024.0);
+            let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+            let modified = format_mtime(mtime);
+            files.push((mtime, ShareDataFile { name, size_mb, modified }));
+        }
+        // 按真实修改时间倒序排序(字符串时间仅作展示,不参与排序)
+        files.sort_by(|a, b| b.0.cmp(&a.0));
+        Ok(files.into_iter().map(|(_, f)| f).collect())
+    })
+    .await
+    .map_err(|e| format!("扫描共享盘数据目录任务异常: {e}"))?
+}
+
+/// 把共享盘 data\ 下指定 Excel 拉到本地缓存 data_root\data\,返回本地路径。
+/// 文件名安全校验防路径穿越;224MB 复制耗时数秒到几十秒,放 blocking 线程。
+#[tauri::command]
+async fn pull_share_data(app: AppHandle, filename: String) -> Result<String, String> {
+    // 安全校验:只允许纯文件名,含路径分隔符或 .. 一律拒绝(防路径穿越)
+    if filename.is_empty()
+        || filename.contains('\\')
+        || filename.contains('/')
+        || filename.contains("..")
+    {
+        return Err("非法的文件名".into());
+    }
+    let cfg = load_config();
+    let src = PathBuf::from(cfg.share_path.trim()).join("data").join(&filename);
+    if !src.exists() {
+        return Err(format!("共享盘上不存在数据文件: {filename}"));
+    }
+    let dst_dir = data_root().join("data");
+    fs::create_dir_all(&dst_dir).map_err(|e| e.to_string())?;
+    let dst = dst_dir.join(&filename);
+    // 本地已有同名缓存时先提示「覆盖」(仅日志,不阻断复制)
+    if dst.exists() {
+        emit_log(&app, "warn", format!("本地已有同名缓存,将覆盖本地缓存: {filename}"));
+    }
+    let size_mb = src
+        .metadata()
+        .map(|m| m.len() as f64 / (1024.0 * 1024.0))
+        .unwrap_or(0.0);
+    emit_log(&app, "info", format!("开始拉取数据文件: {filename} ({size_mb:.1} MB)"));
+
+    let started = Instant::now();
+    let src_c = src.clone();
+    let dst_c = dst.clone();
+    let copied = tauri::async_runtime::spawn_blocking(move || fs::copy(&src_c, &dst_c))
+        .await
+        .map_err(|e| format!("拉取数据文件任务异常: {e}"))?;
+    match copied {
+        Ok(_) => {
+            let secs = started.elapsed().as_secs_f64();
+            emit_log(&app, "ok", format!("数据文件拉取完成(耗时 {secs:.1} 秒): {filename}"));
+            Ok(dst.display().to_string())
+        }
+        Err(e) => {
+            // 目标文件被 Excel 等独占占用时,复制会报共享冲突(32)/拒绝访问(5)
+            let occupied = e.kind() == std::io::ErrorKind::PermissionDenied
+                || e.raw_os_error() == Some(32)
+                || e.raw_os_error() == Some(5);
+            if occupied {
+                return Err("本地缓存文件被占用(可能正在 Excel 中打开),请关闭后重试".into());
+            }
+            Err(format!("拉取数据文件失败: {e}"))
+        }
+    }
 }
 
 // ── 代码同步 ──────────────────────────────────────────
@@ -1194,6 +1393,8 @@ pub fn run() {
             get_config,
             save_config,
             get_status,
+            list_share_data,
+            pull_share_data,
             sync_code,
             run_pipeline,
             stop_pipeline,

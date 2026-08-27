@@ -29,6 +29,11 @@ interface SyncResult {
   version: string;
   message: string;
 }
+interface ShareDataFile {
+  name: string;
+  size_mb: number;
+  modified: string;
+}
 interface LogLine {
   level: string;
   text: string;
@@ -393,6 +398,42 @@ dropZone.addEventListener("click", async () => {
     }
   } catch (e) {
     appendLog("error", "打开文件对话框失败: " + e);
+  }
+});
+
+// 从共享盘一键拉取最新数据文件(财务每月投放 Excel 到共享盘 data\ 目录)。
+// 后端 list_share_data 已按修改时间倒序,这里取第一个即最新;拉取成功复用
+// setDataFile 选中本地缓存,无需刷新状态(数据文件与 get_status 无关)。
+const btnPullShare = byId<HTMLButtonElement>("btn-pull-share");
+btnPullShare.addEventListener("click", async () => {
+  if (btnPullShare.disabled) return; // 防重入
+  btnPullShare.disabled = true;
+  setDetail("正在从共享盘获取数据文件…");
+  try {
+    const files = await invoke<ShareDataFile[]>("list_share_data");
+    if (files.length === 0) {
+      const msg = "共享盘 data\\ 目录暂无 Excel 数据文件(财务尚未投放)";
+      appendLog("warn", msg);
+      showBanner(msg, "info");
+      setDetail("暂无可拉取的数据文件");
+      return;
+    }
+    const f = files[0];
+    appendLog(
+      "info",
+      "发现共享盘数据文件: " + f.name + " (" + f.size_mb.toFixed(1) + "MB, " + f.modified + ")"
+    );
+    const localPath = await invoke<string>("pull_share_data", { filename: f.name });
+    setDataFile(localPath);
+    appendLog("ok", "数据文件已拉取到本地: " + localPath);
+    showToast("数据文件已拉取到本地", "ok");
+    setDetail("数据文件已就绪,可生成看板");
+  } catch (e) {
+    appendLog("error", "从共享盘拉取数据文件失败: " + e);
+    showBanner("从共享盘拉取数据文件失败: " + e);
+    setDetail("拉取失败,请查看上方日志");
+  } finally {
+    btnPullShare.disabled = false;
   }
 });
 

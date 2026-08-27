@@ -95,6 +95,11 @@
           <input type="checkbox" id="opt-skip" />
           <span>跳过数据处理(数据没变,只重新生成看板)</span>
         </label>
+        <!-- 从共享盘拉取最新数据(财务每月投放 Excel 到共享盘 data\;右列网格单元,右对齐避免占满整列) -->
+        <button id="btn-pull-share" class="btn" style="justify-self:end" title="从共享盘 data 目录拉取最新 Excel 数据文件">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          从共享盘获取最新数据
+        </button>
       </div>
 
       <!-- 日志面板 -->
