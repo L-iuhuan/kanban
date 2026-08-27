@@ -153,6 +153,11 @@
           <span>共享盘代码目录(UNC 或本地路径)</span>
           <input type="text" id="share-path-input" placeholder="例:\\server\share\kanban-repo 或 D:\kanban-share" />
         </label>
+        <label class="field">
+          <span>数据文件共享目录</span>
+          <input type="text" id="cfg-data-share-path" placeholder="留空 = 代码共享目录下的 data\" />
+        </label>
+        <div class="update-hint">财务投放 Excel 的位置，与代码更新目录相互独立</div>
         <label class="checkbox-row">
           <input type="checkbox" id="opt-auto-sync" checked />
           <span>启动时自动同步代码</span>

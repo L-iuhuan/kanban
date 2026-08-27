@@ -33,6 +33,10 @@ const DEFAULT_SHARE_PATH: &str = r"\\192.168.8.3\财务部\办公软件\Software
 struct AppConfig {
     #[serde(default)]
     share_path: String,
+    /// 数据文件共享目录(财务投放 Excel 的位置;与代码共享目录相互独立)。
+    /// 留空 = 回退 <share_path>\data(向后兼容)。
+    #[serde(default)]
+    data_share_path: String,
     #[serde(default = "default_true")]
     auto_sync: bool,
 }
@@ -127,6 +131,17 @@ fn data_root() -> PathBuf {
     dir
 }
 
+/// 数据文件共享目录(财务投放 Excel 的位置):data_share_path 非空用独立配置,
+/// 否则回退 <share_path>\data(向后兼容,旧 config 无需改动)
+fn data_share_dir(cfg: &AppConfig) -> PathBuf {
+    let custom = cfg.data_share_path.trim();
+    if custom.is_empty() {
+        Path::new(cfg.share_path.trim()).join("data")
+    } else {
+        PathBuf::from(custom)
+    }
+}
+
 fn config_path() -> PathBuf {
     data_root().join("config.json")
 }
@@ -146,6 +161,7 @@ fn load_config() -> AppConfig {
         // 文件缺失或解析失败：显式构造，保证 share_path 不为空串
         .unwrap_or(AppConfig {
             share_path: DEFAULT_SHARE_PATH.into(),
+            data_share_path: String::new(),
             auto_sync: true,
         })
 }
@@ -411,7 +427,7 @@ fn format_mtime(t: std::time::SystemTime) -> String {
 #[tauri::command]
 async fn list_share_data() -> Result<Vec<ShareDataFile>, String> {
     let cfg = load_config();
-    let data_dir = PathBuf::from(cfg.share_path.trim()).join("data");
+    let data_dir = data_share_dir(&cfg);
     tauri::async_runtime::spawn_blocking(move || {
         if !data_dir.exists() {
             return Ok(Vec::new());
@@ -452,7 +468,7 @@ async fn pull_share_data(app: AppHandle, filename: String) -> Result<String, Str
         return Err("非法的文件名".into());
     }
     let cfg = load_config();
-    let src = PathBuf::from(cfg.share_path.trim()).join("data").join(&filename);
+    let src = data_share_dir(&cfg).join(&filename);
     if !src.exists() {
         return Err(format!("共享盘上不存在数据文件: {filename}"));
     }

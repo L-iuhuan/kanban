@@ -7,6 +7,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 // ── 类型 ──────────────────────────────────────────────
 interface AppConfig {
   share_path: string;
+  data_share_path: string;
   auto_sync: boolean;
 }
 interface Status {
@@ -642,6 +643,7 @@ const settingsModal = byId("settings-modal");
 
 function openSettings() {
   byId<HTMLInputElement>("share-path-input").value = cfgCache?.share_path ?? "";
+  byId<HTMLInputElement>("cfg-data-share-path").value = cfgCache?.data_share_path ?? "";
   byId<HTMLInputElement>("opt-auto-sync").checked = cfgCache?.auto_sync ?? true;
   settingsModal.hidden = false;
 }
@@ -651,12 +653,13 @@ byId("btn-cancel-config").addEventListener("click", () => {
 });
 byId("btn-save-config").addEventListener("click", async () => {
   const sharePath = byId<HTMLInputElement>("share-path-input").value.trim();
+  const dataSharePath = byId<HTMLInputElement>("cfg-data-share-path").value.trim();
   const autoSync = byId<HTMLInputElement>("opt-auto-sync").checked;
   try {
     await invoke("save_config", {
-      cfg: { share_path: sharePath, auto_sync: autoSync },
+      cfg: { share_path: sharePath, data_share_path: dataSharePath, auto_sync: autoSync },
     });
-    cfgCache = { share_path: sharePath, auto_sync: autoSync };
+    cfgCache = { share_path: sharePath, data_share_path: dataSharePath, auto_sync: autoSync };
     appendLog("ok", "设置已保存");
     showToast("设置已保存", "ok");
     settingsModal.hidden = true;
@@ -685,7 +688,7 @@ async function refreshStatus() {
     // cfgCache 的权威来源是 init 的 get_config 和设置弹层的保存流程,
     // 这里只负责在缺失时初始化,并跟随状态同步 share_path,绝不覆盖用户保存的 auto_sync。
     if (!cfgCache) {
-      cfgCache = { share_path: s.share_path, auto_sync: true };
+      cfgCache = { share_path: s.share_path, data_share_path: "", auto_sync: true };
     } else {
       cfgCache = { ...cfgCache, share_path: s.share_path };
     }
