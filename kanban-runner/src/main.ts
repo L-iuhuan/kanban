@@ -402,7 +402,7 @@ dropZone.addEventListener("click", async () => {
   }
 });
 
-// 从共享盘一键拉取最新数据文件(财务每月投放 Excel 到共享盘 data\ 目录)。
+// 从共享盘一键拉取最新数据文件(月度 Excel 投放到数据共享目录)。
 // 后端 list_share_data 已按修改时间倒序,这里取第一个即最新;拉取成功复用
 // setDataFile 选中本地缓存,无需刷新状态(数据文件与 get_status 无关)。
 const btnPullShare = byId<HTMLButtonElement>("btn-pull-share");
@@ -413,7 +413,7 @@ btnPullShare.addEventListener("click", async () => {
   try {
     const files = await invoke<ShareDataFile[]>("list_share_data");
     if (files.length === 0) {
-      const msg = "共享盘 data\\ 目录暂无 Excel 数据文件(财务尚未投放)";
+      const msg = "数据共享目录暂无 Excel 数据文件(尚未投放新数据)";
       appendLog("warn", msg);
       showBanner(msg, "info");
       setDetail("暂无可拉取的数据文件");
@@ -445,6 +445,9 @@ byId("opt-skip").addEventListener("change", () => {
 
 // ── 同步 ──────────────────────────────────────────────
 async function runSync(silent = false) {
+  // 记录进入前状态,成功后复位:此前成功路径不复位,手动同步后 appState 卡在
+  // syncing → btnRun 禁用/btnStop 启用(状态机 bug,用户表现为"无法运行")
+  const prevState = appState;
   setAppState("syncing");
   setDetail("正在从共享盘同步最新代码…");
   try {
@@ -457,6 +460,8 @@ async function runSync(silent = false) {
       lastNotifiedRemote = null;
       // 同步完成的明确通报(步骤条已不含同步阶段,用详情行反馈)
       setDetail("代码已同步,当前版本 " + r.version.split(" @")[0]);
+      // 瞬态(syncing/setting-up)兜底回 idle;running/done/failed 原样恢复
+      setAppState(prevState === "syncing" || prevState === "setting-up" ? "idle" : prevState);
     }
     return r;
   } catch (e) {
