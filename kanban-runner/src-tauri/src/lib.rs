@@ -29,12 +29,17 @@ impl Default for Cancelled {
 /// 预置共享盘路径：部署前改为实际 UNC 路径；config.json 仅用于覆盖
 const DEFAULT_SHARE_PATH: &str = r"\\192.168.8.3\财务部\办公软件\SoftwareUpdate\数据分析看板";
 
+/// 预置数据共享目录：财务投放 Excel 的位置（r14：与代码共享目录相互独立，用户拍板 2026-08-27）。
+/// config.json 的 data_share_path 可覆盖；与流水线 run_chain.py/ingest_snapshot.py 的
+/// DIR_DATA_SHARE 三处同源，变更时必须同步修改。
+const DEFAULT_DATA_SHARE_PATH: &str = r"\\192.168.8.3\财务部\财务电子档案备份\D1经营分析";
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct AppConfig {
     #[serde(default)]
     share_path: String,
     /// 数据文件共享目录(财务投放 Excel 的位置;与代码共享目录相互独立)。
-    /// 留空 = 回退 <share_path>\data(向后兼容)。
+    /// 留空 = 内置默认 DEFAULT_DATA_SHARE_PATH。
     #[serde(default)]
     data_share_path: String,
     #[serde(default = "default_true")]
@@ -132,11 +137,11 @@ fn data_root() -> PathBuf {
 }
 
 /// 数据文件共享目录(财务投放 Excel 的位置):data_share_path 非空用独立配置,
-/// 否则回退 <share_path>\data(向后兼容,旧 config 无需改动)
+/// 否则回退内置默认 DEFAULT_DATA_SHARE_PATH(r14:数据共享夹独立于代码共享夹)
 fn data_share_dir(cfg: &AppConfig) -> PathBuf {
     let custom = cfg.data_share_path.trim();
     if custom.is_empty() {
-        Path::new(cfg.share_path.trim()).join("data")
+        PathBuf::from(DEFAULT_DATA_SHARE_PATH)
     } else {
         PathBuf::from(custom)
     }
