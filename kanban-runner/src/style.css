@@ -69,12 +69,20 @@ body{background:var(--bg-image)}
 
 /* stage */
 .stage-title{font-size:13px;font-weight:600;margin-bottom:12px}
-.stepper{list-style:none;display:flex;flex-wrap:wrap;align-items:center;row-gap:8px;column-gap:4px;margin-bottom:14px;min-height:64px}
+.stepper{list-style:none;display:flex;flex-direction:column;align-items:stretch;gap:4px;margin-bottom:14px;min-height:64px}
 .stepper li{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text-dim);white-space:nowrap;max-width:150px;min-width:0}
-.stepper li.placeholder{opacity:.55;font-style:italic;max-width:280px}
-/* 节点间接连线:一条短细线(换行后每行首项保留连接器=双行衔接视觉,首项无) */
-.stepper li::before{content:"";width:12px;height:2px;background:var(--line);border-radius:1px;flex-shrink:0;margin:0 4px}
-.stepper li:first-child::before{display:none}
+.stepper li.placeholder{opacity:.55;font-style:italic;max-width:280px;align-self:flex-start}
+/* 行容器:row1 左→右,row2 row-reverse 右→左回绕;space-between 让首末节点锚定左右边缘(蛇形 S) */
+.stepper-row{display:flex;align-items:center;gap:4px;justify-content:space-between;min-height:20px}
+.stepper-row.row-reverse{flex-direction:row-reverse}
+/* 行内连接器:row1 用 ::before(节点左侧),row2 用 ::after(节点右侧,回绕流) */
+.stepper-row > li::before{content:"";width:12px;height:2px;background:var(--line);border-radius:1px;flex-shrink:0;margin:0 4px}
+.stepper-row > li:first-child::before{display:none}
+.stepper-row.row-reverse > li::before{display:none}
+.stepper-row.row-reverse > li::after{content:"";width:12px;height:2px;background:var(--line);border-radius:1px;flex-shrink:0;margin:0 4px}
+.stepper-row.row-reverse > li:first-child::after{display:none}
+/* 行间绕下连接符:┐ 折线(右缘,row1 末节点绕下到 row2 起点),蛇形流程转向 */
+.stepper-turn{display:flex;justify-content:flex-end;align-items:center;height:16px;color:var(--text-dim)}
 .stepper li .s-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .s-idx{width:20px;height:20px;border-radius:50%;border:1.5px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;transition:all 0.2s;position:relative}
 .s-check,.s-x{position:absolute;opacity:0;transform:scale(0.8);transition:all 0.2s}

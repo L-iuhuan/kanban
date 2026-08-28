@@ -181,6 +181,9 @@ const S_CHECK_SVG =
   '<svg class="s-check" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 const S_X_SVG =
   '<svg class="s-x" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+// 行间绕下连接符:┐ 折线(右缘,row1 末节点绕下到 row2 起点),蛇形流程的转向视觉
+const S_TURN_SVG =
+  '<svg class="s-turn" viewBox="0 0 12 16" width="12" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1h10 M11 1v14"/></svg>';
 
 /** 首次收到阶段事件前显示占位提示 */
 function showStepperPlaceholder() {
@@ -192,6 +195,15 @@ function buildStepper(total: number) {
   stepperEl.innerHTML = "";
   stepperItems = [];
   stepperTotal = total;
+  // 蛇形 S 形流程带:row1 = 前 ceil(n/2) 个(左→右),row2 = 其余(视觉右→左回绕)。
+  // DOM 始终按流程顺序 append(row2 用 flex-direction:row-reverse 视觉从右往左排);
+  // n<=3 时单行(不渲染 row2 与绕下连接符)。
+  const rowLen = Math.ceil(total / 2);
+  const row2Count = total - rowLen;
+  const row1 = document.createElement("div");
+  row1.className = "stepper-row";
+  const row2 = row2Count > 0 ? document.createElement("div") : null;
+  if (row2) row2.className = "stepper-row row-reverse";
   for (let i = 0; i < total; i++) {
     const li = document.createElement("li");
     li.innerHTML =
@@ -203,8 +215,17 @@ function buildStepper(total: number) {
       '</span><span class="s-name">阶段 ' +
       (i + 1) +
       "</span>";
-    stepperEl.appendChild(li);
-    stepperItems.push(li);
+    if (i < rowLen) row1.appendChild(li);
+    else row2!.appendChild(li);
+    stepperItems.push(li); // 保持流程顺序,setStageState/阶段名按索引定位不变
+  }
+  stepperEl.appendChild(row1);
+  if (row2) {
+    const turn = document.createElement("div");
+    turn.className = "stepper-turn";
+    turn.innerHTML = S_TURN_SVG; // ┐ 折线:行尾从右缘绕下到第二行
+    stepperEl.appendChild(turn);
+    stepperEl.appendChild(row2);
   }
 }
 
