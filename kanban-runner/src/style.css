@@ -69,9 +69,13 @@ body{background:var(--bg-image)}
 
 /* stage */
 .stage-title{font-size:13px;font-weight:600;margin-bottom:12px}
-.stepper{list-style:none;display:flex;flex-direction:column;gap:9px;margin-bottom:14px}
-.stepper li{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--text-dim)}
-.stepper li.placeholder{opacity:.55;font-style:italic}
+.stepper{list-style:none;display:flex;flex-wrap:wrap;align-items:center;row-gap:8px;column-gap:4px;margin-bottom:14px;min-height:64px}
+.stepper li{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text-dim);white-space:nowrap;max-width:150px;min-width:0}
+.stepper li.placeholder{opacity:.55;font-style:italic;max-width:280px}
+/* 节点间接连线:一条短细线(换行后每行首项保留连接器=双行衔接视觉,首项无) */
+.stepper li::before{content:"";width:12px;height:2px;background:var(--line);border-radius:1px;flex-shrink:0;margin:0 4px}
+.stepper li:first-child::before{display:none}
+.stepper li .s-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .s-idx{width:20px;height:20px;border-radius:50%;border:1.5px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;transition:all 0.2s;position:relative}
 .s-check,.s-x{position:absolute;opacity:0;transform:scale(0.8);transition:all 0.2s}
 .stepper li.active{color:var(--text)}
@@ -86,7 +90,7 @@ body{background:var(--bg-image)}
 .stepper li.failed .s-idx .s-x{opacity:1;transform:scale(1)}
 .progress{height:8px;background:var(--track);border-radius:4px;overflow:hidden}
 .progress-bar{height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent-2));border-radius:4px;transition:width 0.3s ease}
-.stage-detail{margin-top:10px;font-size:12px;color:var(--text-dim);min-height:16px}
+.stage-detail{margin-top:10px;font-size:12px;color:var(--text-dim);height:16px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* log */
 .log-card{flex:1;display:flex;flex-direction:column;min-height:0;padding:12px 14px}
