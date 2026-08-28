@@ -1362,6 +1362,62 @@ async fn take_update_result() -> Result<Option<String>, String> {
     }
 }
 
+/// 0.3.16 迁移缺口：productName 从「看板助手」改为「KanbanAssistant」后，新装包写到
+/// %LOCALAPPDATA%\KanbanAssistant\，而存量旧版（0.3.13-0.3.15，装在 %LOCALAPPDATA%\看板助手\）
+/// 自更新到 0.3.16 不会搬走/卸载——旧安装会残留孤儿目录、卸载器与注册表键。
+/// 启动时检测旧目录并静默清理；整个函数必须快速返回，耗时操作（卸载器 / reg delete /
+/// 目录延迟删除）全部异步 spawn，绝不阻塞启动。
+fn cleanup_legacy_install(app: &AppHandle) {
+    // 1) legacy_dir = %LOCALAPPDATA%\看板助手；不存在 → 直接返回
+    let Ok(local) = std::env::var("LOCALAPPDATA") else {
+        return;
+    };
+    let legacy_dir = std::path::Path::new(&local).join("看板助手");
+    if !legacy_dir.is_dir() {
+        return;
+    }
+    // 2) 防自删守卫：当前 exe 就在旧目录下 → 返回（旧版无此代码不会走到，但守卫必须有）
+    if let Ok(exe) = std::env::current_exe() {
+        let exe_l = exe.to_string_lossy().to_lowercase();
+        let legacy_l = legacy_dir.to_string_lossy().to_lowercase();
+        if exe_l.starts_with(&legacy_l) {
+            return;
+        }
+    }
+    // 3) 通报
+    emit_log(app, "info", "检测到旧版安装（看板助手目录），正在自动清理…".into());
+    // 4) 静默卸载旧版：NSIS 卸载器会自复制到 TEMP 异步执行，不能 wait（会卡启动）→ fire-and-forget
+    let uninstaller = legacy_dir.join("uninstall.exe");
+    if uninstaller.is_file() {
+        let mut c = std::process::Command::new(&uninstaller);
+        c.arg("/S");
+        no_window(&mut c);
+        let _ = c.spawn();
+    }
+    // 5) 注册表残留清理：NSIS 卸载器实测会留下该键；用 reg 直接传参（不走 cmd，避免中文路径编码坑）
+    let reg_key = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\看板助手";
+    let mut c = std::process::Command::new("reg");
+    c.args(["delete", reg_key, "/f"]);
+    no_window(&mut c);
+    let _ = c.spawn();
+    // 6) 目录延迟清理：卸载器自删后目录可能有残余，延迟 10s 再整体删除（失败仅告警，不 panic）
+    let app2 = app.clone();
+    let legacy2 = legacy_dir.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(10));
+        match std::fs::remove_dir_all(&legacy2) {
+            Ok(()) => emit_log(&app2, "ok", "旧版安装目录已清理".into()),
+            Err(e) => emit_log(
+                &app2,
+                "warn",
+                format!("旧版安装目录延迟清理失败（可能已被卸载器移除）: {e}"),
+            ),
+        }
+    });
+    // 7) 通报完成（第 6 步结果在延迟线程里另行 log）
+    emit_log(app, "ok", "旧版安装已清理".into());
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1397,6 +1453,8 @@ pub fn run() {
                     let _ = w.show();
                 });
             }
+            // 0.3.16 迁移缺口补：旧版（看板助手目录）安装启动时自动清理（全异步，不阻塞启动）
+            cleanup_legacy_install(app.handle());
             Ok(())
         })
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
