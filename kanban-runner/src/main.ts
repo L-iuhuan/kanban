@@ -286,7 +286,6 @@ function setAppState(state: AppState) {
   const btnDash = byId<HTMLButtonElement>("btn-open-dashboard");
   const btnSilver = byId<HTMLButtonElement>("btn-open-silver");
   const btnGold = byId<HTMLButtonElement>("btn-open-gold");
-  const btnReport = byId<HTMLButtonElement>("btn-open-report");
   const btnOutput = byId<HTMLButtonElement>("btn-open-output");
   running = state === "running" || state === "syncing" || state === "setting-up";
   btnStop.disabled = !running;
@@ -298,7 +297,6 @@ function setAppState(state: AppState) {
   btnDash.disabled = !canViewDash;
   btnSilver.disabled = !canViewOut;
   btnGold.disabled = !canViewOut;
-  btnReport.disabled = !canViewOut;
   btnOutput.disabled = !canViewOut;
   if (state === "done" && stepperItems.length > 0) {
     setStageState(stepperItems.length - 1, "done");
@@ -436,6 +434,82 @@ btnPullShare.addEventListener("click", async () => {
   } finally {
     btnPullShare.disabled = false;
   }
+});
+
+// 共享盘文件选择(可选入口:列出共享盘 data 目录全部 Excel 供点选;默认取最新按钮逻辑不动)。
+// 复用 list_share_data / pull_share_data 双命令 + setDataFile / appendLog / showToast 反馈体系;
+// 面板复用设置弹层的 modal-mask/modal 形态,行为:点击行拉取该文件→选中→关面板;
+// 空列表提示(与拉取按钮口径一致)、点击遮罩/Esc 关闭、拉取期间行禁用防重入。
+const sharePicker = byId("share-picker-modal");
+const sharePickerList = byId("share-picker-list");
+const sharePickerEmpty = byId("share-picker-empty");
+let pickingShare = false;
+
+function closeSharePicker() {
+  sharePicker.hidden = true;
+  sharePickerList.innerHTML = "";
+  sharePickerEmpty.hidden = true;
+}
+
+function renderSharePicker(files: ShareDataFile[]) {
+  sharePickerList.innerHTML = "";
+  if (files.length === 0) {
+    sharePickerEmpty.hidden = false;
+    return;
+  }
+  for (const f of files) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "btn";
+    row.style.cssText =
+      "width:100%;justify-content:flex-start;padding:9px 12px";
+    row.title = "拉取 " + f.name;
+    const nameSpan = document.createElement("span");
+    nameSpan.style.cssText =
+      "flex:1;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+    nameSpan.textContent = f.name;
+    const metaSpan = document.createElement("span");
+    metaSpan.style.cssText = "color:var(--text-dim);flex-shrink:0;font-size:12px";
+    metaSpan.textContent = f.size_mb.toFixed(1) + "MB · " + f.modified;
+    row.appendChild(nameSpan);
+    row.appendChild(metaSpan);
+    row.addEventListener("click", async () => {
+      if (pickingShare) return; // 防重入
+      pickingShare = true;
+      const rows = sharePickerList.querySelectorAll("button");
+      rows.forEach((b) => ((b as HTMLButtonElement).disabled = true));
+      appendLog("info", "正在从共享盘拉取: " + f.name + " (" + f.size_mb.toFixed(1) + "MB)");
+      try {
+        const localPath = await invoke<string>("pull_share_data", { filename: f.name });
+        setDataFile(localPath);
+        appendLog("ok", "数据文件已拉取到本地: " + localPath);
+        showToast("数据文件已拉取到本地", "ok");
+        closeSharePicker();
+      } catch (e) {
+        appendLog("error", "从共享盘拉取数据文件失败: " + e);
+        showBanner("从共享盘拉取数据文件失败: " + e);
+      } finally {
+        pickingShare = false;
+        rows.forEach((b) => ((b as HTMLButtonElement).disabled = false));
+      }
+    });
+    sharePickerList.appendChild(row);
+  }
+}
+byId("btn-pick-share").addEventListener("click", async () => {
+  try {
+    const files = await invoke<ShareDataFile[]>("list_share_data");
+    renderSharePicker(files);
+    sharePicker.hidden = false;
+  } catch (e) {
+    appendLog("error", "获取共享盘文件列表失败: " + e);
+    showToast("获取共享盘文件列表失败", "err");
+  }
+});
+byId("btn-close-picker").addEventListener("click", closeSharePicker);
+// 点击遮罩(面板外部)关闭
+sharePicker.addEventListener("click", (e) => {
+  if (e.target === sharePicker) closeSharePicker();
 });
 
 byId("opt-skip").addEventListener("change", () => {
@@ -598,7 +672,6 @@ byId("btn-open-dashboard").addEventListener("click", async () => {
 for (const [btnId, kind] of [
   ["btn-open-silver", "silver"],
   ["btn-open-gold", "gold"],
-  ["btn-open-report", "report"],
   ["btn-open-output", "output"],
 ] as const) {
   byId(btnId).addEventListener("click", async () => {
@@ -678,6 +751,7 @@ byId("btn-save-config").addEventListener("click", async () => {
 });
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !settingsModal.hidden) settingsModal.hidden = true;
+  if (e.key === "Escape" && !sharePicker.hidden) sharePicker.hidden = true;
 });
 byId("share-path-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
