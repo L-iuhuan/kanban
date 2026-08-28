@@ -1418,6 +1418,41 @@ fn cleanup_legacy_install(app: &AppHandle) {
     emit_log(app, "ok", "旧版安装已清理".into());
 }
 
+/// 0.3.18：productName 改 ASCII（KanbanAssistant）后，NSIS 默认按 productName 创建快捷方式名
+/// 为 KanbanAssistant.lnk（桌面+开始菜单），用户要中文「看板助手」。壳启动自检（主保险）：
+/// 检测到英文名快捷方式存在且中文名不存在 → fs::rename 改名；两者都在/都不在 → 静默跳过
+/// （用户自删快捷方式不重造）。同步快速完成（两次文件检查+可能的 rename，毫秒级），不用 spawn。
+fn ensure_chinese_shortcuts(app: &AppHandle) {
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(p) = std::env::var("USERPROFILE") {
+        dirs.push(std::path::PathBuf::from(&p).join("Desktop"));
+    }
+    if let Ok(a) = std::env::var("APPDATA") {
+        dirs.push(
+            std::path::PathBuf::from(&a)
+                .join("Microsoft")
+                .join("Windows")
+                .join("Start Menu")
+                .join("Programs"),
+        );
+    }
+    for dir in dirs {
+        let en = dir.join("KanbanAssistant.lnk");
+        let zh = dir.join("看板助手.lnk");
+        if en.is_file() && !zh.exists() {
+            match std::fs::rename(&en, &zh) {
+                Ok(()) => emit_log(
+                    app,
+                    "info",
+                    format!("快捷方式已更新为中文名（{}）", zh.display()),
+                ),
+                Err(e) => emit_log(app, "warn", format!("快捷方式改名失败（{}）: {e}", en.display())),
+            }
+        }
+        // 两者都在/都不在 → 静默跳过
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1455,6 +1490,8 @@ pub fn run() {
             }
             // 0.3.16 迁移缺口补：旧版（看板助手目录）安装启动时自动清理（全异步，不阻塞启动）
             cleanup_legacy_install(app.handle());
+            // 0.3.18：productName 改 ASCII 后快捷方式名跟着英文，启动自检改回中文（桌面+开始菜单，幂等）
+            ensure_chinese_shortcuts(app.handle());
             Ok(())
         })
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
