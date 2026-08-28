@@ -181,9 +181,6 @@ const S_CHECK_SVG =
   '<svg class="s-check" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 const S_X_SVG =
   '<svg class="s-x" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
-// 行间绕下连接符:┐ 折线(右缘,row1 末节点绕下到 row2 起点),蛇形流程的转向视觉
-const S_TURN_SVG =
-  '<svg class="s-turn" viewBox="0 0 12 16" width="12" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1h10 M11 1v14"/></svg>';
 
 /** 首次收到阶段事件前显示占位提示 */
 function showStepperPlaceholder() {
@@ -215,15 +212,23 @@ function buildStepper(total: number) {
       '</span><span class="s-name">阶段 ' +
       (i + 1) +
       "</span>";
-    if (i < rowLen) row1.appendChild(li);
-    else row2!.appendChild(li);
+    const row = i < rowLen ? row1 : row2!;
+    row.appendChild(li);
     stepperItems.push(li); // 保持流程顺序,setStageState/阶段名按索引定位不变
+    // 连续轨道:每节点后插 <span class="stepper-rail">(flex:1 拉伸,零 gap 贴合节点);
+    // 行末节点不插轨道(最后一段由绕下肘线/无轨道承接)
+    const isLastOfRow = i === rowLen - 1 || i === total - 1;
+    if (!isLastOfRow) {
+      const rail = document.createElement("span");
+      rail.className = "stepper-rail";
+      row.appendChild(rail);
+    }
   }
   stepperEl.appendChild(row1);
   if (row2) {
+    // 绕下肘线:纯 CSS(border-right 竖线,见 style.css),空容器
     const turn = document.createElement("div");
     turn.className = "stepper-turn";
-    turn.innerHTML = S_TURN_SVG; // ┐ 折线:行尾从右缘绕下到第二行
     stepperEl.appendChild(turn);
     stepperEl.appendChild(row2);
   }

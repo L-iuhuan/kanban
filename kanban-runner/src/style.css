@@ -69,22 +69,21 @@ body{background:var(--bg-image)}
 
 /* stage */
 .stage-title{font-size:13px;font-weight:600;margin-bottom:12px}
-.stepper{list-style:none;display:flex;flex-direction:column;align-items:stretch;gap:4px;margin-bottom:14px;min-height:64px}
-.stepper li{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text-dim);white-space:nowrap;max-width:150px;min-width:0}
+.stepper{list-style:none;display:flex;flex-direction:column;align-items:stretch;gap:0;margin-bottom:14px;min-height:64px}
+.stepper li{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text-dim);white-space:nowrap;max-width:150px;min-width:0;flex-shrink:1}
 .stepper li.placeholder{opacity:.55;font-style:italic;max-width:280px;align-self:flex-start}
-/* 行容器:row1 左→右,row2 row-reverse 右→左回绕;space-between 让首末节点锚定左右边缘(蛇形 S) */
-.stepper-row{display:flex;align-items:center;gap:4px;justify-content:space-between;min-height:20px}
+/* 行容器:row1 左→右,row2 row-reverse 右→左回绕;连续轨道 flex:1 撑开(无 gap,零间隙贴合) */
+.stepper-row{display:flex;align-items:center}
 .stepper-row.row-reverse{flex-direction:row-reverse}
-/* 行内连接器:row1 用 ::before(节点左侧),row2 用 ::after(节点右侧,回绕流) */
-.stepper-row > li::before{content:"";width:12px;height:2px;background:var(--line);border-radius:1px;flex-shrink:0;margin:0 4px}
-.stepper-row > li:first-child::before{display:none}
-.stepper-row.row-reverse > li::before{display:none}
-.stepper-row.row-reverse > li::after{content:"";width:12px;height:2px;background:var(--line);border-radius:1px;flex-shrink:0;margin:0 4px}
-.stepper-row.row-reverse > li:first-child::after{display:none}
-/* 行间绕下连接符:┐ 折线(右缘,row1 末节点绕下到 row2 起点),蛇形流程转向 */
-.stepper-turn{display:flex;justify-content:flex-end;align-items:center;height:16px;color:var(--text-dim)}
+/* 连续轨道:节点间独立轨道元素(flex:1 拉伸,垫在节点下方穿过=连续感);行末节点后无轨道 */
+.stepper-rail{flex:1;min-width:12px;height:2px;background:var(--line);border-radius:1px}
+/* 完成段轨道随前驱节点变色(rc-steps 同款:li.done + .rail) */
+.stepper-row li.done + .stepper-rail{background:var(--accent)}
+/* 行间绕下肘线:右缘竖线(border-right + margin-right 使 2px 线居中于节点圆心列=右缘内缩10px),
+   节点实心底盖住线头=无缝 */
+.stepper-turn{height:16px;margin-right:9px;border-right:2px solid var(--line)}
 .stepper li .s-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.s-idx{width:20px;height:20px;border-radius:50%;border:1.5px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;transition:all 0.2s;position:relative}
+.s-idx{width:20px;height:20px;border-radius:50%;border:1.5px solid var(--line);background:var(--card);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;transition:all 0.2s;position:relative}
 .s-check,.s-x{position:absolute;opacity:0;transform:scale(0.8);transition:all 0.2s}
 .stepper li.active{color:var(--text)}
 .stepper li.active .s-idx{border-color:var(--accent);background:rgba(123,108,255,0.2);color:#fff;box-shadow:0 0 8px rgba(123,108,255,0.5)}
