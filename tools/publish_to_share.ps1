@@ -149,6 +149,7 @@ if (Test-Path $requirements) {
       "python-calamine"  { $item = "python_calamine" }
       "chinese-calendar" { $item = "chinese_calendar" }
       "pywin32"          { $item = "win32com" }
+      "pyyaml"           { $item = "yaml" }
     }
     $deps += $item
   }
