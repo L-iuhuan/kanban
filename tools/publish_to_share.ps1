@@ -9,12 +9,14 @@
 #       # 同时发布壳子安装包(壳子更新:客户端启动时会提示有新版本)
 #   .\publish_to_share.ps1 -ShareRoot \\server\share\...    # 显式指定共享盘(默认读 share_config.json)
 #   .\publish_to_share.ps1 -Force                           # 非交互环境:跳过"已是最新"确认,直接发布
+#   .\publish_to_share.ps1 -DryRun                          # 干跑:只打印将同步的白名单与对账删除清单,不执行任何写入
 param(
   [string]$SourceDir = "E:\3-其他资料\数据分析\sales_analytics_platform",
   [string]$ShareRoot = "",
   [string]$AppInstaller = "",
   [string]$AppVersion = "",
-  [switch]$Force
+  [switch]$Force,
+  [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -73,7 +75,7 @@ if (-not (Test-Path (Join-Path $SourceDir "run_chain.py"))) {
 $hash = Get-GitShortHash -Dir $SourceDir
 if (-not $hash) { $hash = "nogit" }
 $dst = Join-Path $ShareRoot "code"
-New-Item -ItemType Directory -Force -Path $dst | Out-Null
+if (-not $DryRun) { New-Item -ItemType Directory -Force -Path $dst | Out-Null }
 $shareHash = ""
 $verFile = Join-Path $dst "version.txt"
 if (Test-Path $verFile) {
@@ -100,23 +102,77 @@ if ($shareHash -and ($hash -ieq $shareHash)) {
   Write-Output "共享盘落后: share=$shareDisplay local=$hash,继续同步"
 }
 
-# ── 1. 同步代码到共享盘 code/(镜像;排除运行时产物/测试/环境) ──
+# ── 1. 同步代码到共享盘 code/(白名单最小可运行集) ──
+# 用户拍板:发布从"黑名单排除"改为"白名单最小可运行集"——只同步客户端运行必需的
+# run_chain.py + processing\ + dashboard\(模板/口径/风险md,排除生成的看板 html) + requirements.txt
+# + chain_config.json + 部门-人员-职务对应.md;docs\、*.bat、conftest.py、README.md 等过程/测试/
+# 调整文件保留本地不同步。对账清理:同步后枚举 dst 顶层,凡不在白名单(+version.txt/deps.txt)
+# 的一律删除——共享盘 code\ 真正只剩最小集,旧的 docs\.bat 等被清走。
+# 白名单纪律:新增客户端运行时依赖文件必须加进 $whitelistDirs / $whitelistFiles,否则不会同步;
+# 生成物(dashboard_a.html/preagg.json/任何生成的看板 html)绝不加白名单。
 
-# 人员对应表随代码分发:data/ 目录不参与同步,先提升到包根(包根文件会被 robocopy 同步),
+# 人员对应表随代码分发:data/ 目录不参与同步,先提升到包根(包根文件会被按白名单同步),
 # 客户端 run_chain.py 会在本地 data/ 缺失时从包根接入
 $personnel = Join-Path $SourceDir "data\部门-人员-职务对应.md"
 if (Test-Path $personnel) {
-  Copy-Item $personnel (Join-Path $SourceDir "部门-人员-职务对应.md") -Force
-  Write-Output "  人员对应表已提升到包根(随代码分发)"
+  if ($DryRun) {
+    Write-Output "  人员对应表将提升到包根(随代码分发) [干跑,不写入]"
+  } else {
+    Copy-Item $personnel (Join-Path $SourceDir "部门-人员-职务对应.md") -Force
+    Write-Output "  人员对应表已提升到包根(随代码分发)"
+  }
 }
 
-Write-Output "[1/4] 同步代码: $SourceDir -> $dst"
-# 共享安全(2026-08-24 用户拍板):共享盘只出核心代码——排除含全量业务数据的看板产物(dashboard_a.html)、
-# 预聚合缓存(preagg.json)、快照仓(data_warehouse)。历史上 dashboard_a.html 曾被同步,已手工清理。
-robocopy $SourceDir $dst /MIR /XD .git output data data_warehouse __pycache__ .venv .pytest_cache test node_modules /XF *.pyc *.log dashboard_a.html preagg.json "~`$*" /R:1 /W:1 /NFL /NDL /NJH /NP /MT:8 | Out-Null
-if ($LASTEXITCODE -gt 7) {
-  Write-Error "代码同步失败 (robocopy 退出码 $LASTEXITCODE)"
-  exit 1
+# 白名单:目录(robocopy /MIR 镜像+缓存排除)与顶层单文件;version.txt/deps.txt 由脚本直写,不在此列。
+# dashboard 特例:robocopy /MIR 排 *.html(任何生成/测试看板 html 自动排除)后补拷唯一模板 template.html
+# (模板是必须保留的;generated dashboard_a.html/preagg.json/template_risk_test.html 等一律不同步)。
+$whitelistDirs = @("processing")
+$whitelistFiles = @("run_chain.py", "requirements.txt", "chain_config.json", "部门-人员-职务对应.md")
+$keepTop = @($whitelistDirs + "dashboard" + $whitelistFiles + @("version.txt", "deps.txt"))
+
+Write-Output "[1/4] 同步代码(白名单最小集): $SourceDir -> $dst"
+if ($DryRun) {
+  Write-Output "  [干跑] 将同步(白名单):"
+  foreach ($d in $whitelistDirs) { Write-Output "    目录  $d\  (robocopy /MIR, 排 __pycache__/*.pyc)" }
+  Write-Output "    目录  dashboard\  (robocopy /MIR, 排 __pycache__/*.pyc/*.html/preagg.json + 补拷 template.html)"
+  foreach ($f in $whitelistFiles) { Write-Output "    文件  $f" }
+  Write-Output "    文件  version.txt / deps.txt  (脚本直写, 不经 robocopy)"
+} else {
+  foreach ($d in $whitelistDirs) {
+    robocopy (Join-Path $SourceDir $d) (Join-Path $dst $d) /MIR /XD __pycache__ /XF *.pyc /R:1 /W:1 /NFL /NDL /NJH /NP /MT:8 | Out-Null
+    if ($LASTEXITCODE -gt 7) { Write-Error "目录同步失败 (robocopy $LASTEXITCODE): $d"; exit 1 }
+  }
+  robocopy (Join-Path $SourceDir "dashboard") (Join-Path $dst "dashboard") /MIR /XD __pycache__ /XF *.html *.pyc preagg.json /R:1 /W:1 /NFL /NDL /NJH /NP /MT:8 | Out-Null
+  if ($LASTEXITCODE -gt 7) { Write-Error "dashboard 同步失败 (robocopy $LASTEXITCODE)"; exit 1 }
+  Copy-Item (Join-Path $SourceDir "dashboard\template.html") (Join-Path $dst "dashboard\template.html") -Force
+  foreach ($f in $whitelistFiles) {
+    $srcF = Join-Path $SourceDir $f
+    if (Test-Path $srcF) { Copy-Item $srcF (Join-Path $dst $f) -Force }
+    else { Write-Output "  [警告] 白名单文件缺失(不同步): $f" }
+  }
+}
+
+# ── 对账清理:枚举 dst 顶层,凡不在白名单(+version.txt/deps.txt)的一律删除(干跑只打印清单) ──
+$toDelete = @()
+if (Test-Path $dst) { $toDelete = @(Get-ChildItem $dst -Force | Where-Object { $_.Name -notin $keepTop }) }
+if ($toDelete.Count -gt 0) {
+  Write-Output "  [对账] 以下共享盘顶层项不在白名单,将删除:"
+  foreach ($item in $toDelete) {
+    $kind = if ($item.PSIsContainer) { "目录" } else { "文件" }
+    Write-Output "    - [$kind] $($item.Name)"
+  }
+  if (-not $DryRun) {
+    foreach ($item in $toDelete) { Remove-Item $item.FullName -Recurse -Force }
+  }
+} else {
+  Write-Output "  [对账] 共享盘顶层无多余项(全为白名单)"
+}
+
+# 干跑模式:只打印,不执行任何写入/发布(不生成 version/deps、不推便携 python、不发 app)
+if ($DryRun) {
+  Write-Output ""
+  Write-Output "[干跑] 其余环节(version.txt/deps.txt/便携python/app 发布)已跳过。以上为将同步的白名单与对账清理清单。"
+  exit 0
 }
 
 # ── 2. 生成版本号(优先 git commit 短哈希,仓库不可用时用时间戳) ──
