@@ -1,6 +1,6 @@
 [package]
 name = "kanban-runner"
-version = "0.3.15"
+version = "0.3.16"
 description = "看板流水线运行器:自动同步代码并运行销售分析流水线"
 edition = "2021"
 

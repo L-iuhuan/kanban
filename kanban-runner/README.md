@@ -16,7 +16,7 @@
 \\192.168.8.3\财务部\财务电子档案备份\D1经营分析\   ← 月度 Excel 投放处,「从共享盘获取最新数据」按钮从此拉取
 
 每台测试电脑
-├─ %LOCALAPPDATA%\看板助手\kanban-runner.exe   ← 本应用(NSIS 安装,免管理员)
+├─ %LOCALAPPDATA%\KanbanAssistant\kanban-runner.exe   ← 本应用(NSIS 安装,免管理员;0.3.16 起 productName 改 ASCII——中文安装路径会踩 NSIS 卸载器"自复制到 TEMP"的已知雷,设置里卸载报 Error launching installer;设置应用列表显示 KanbanAssistant,应用界面仍中文)
 └─ %LOCALAPPDATA%\KanbanRunner\                ← 数据目录(exe 装哪都行)
     ├─ code\          ← 代码缓存(启动时自动 robocopy 同步)
     ├─ python\        ← 便携 Python(随代码同步,含 pywin32 供 DSE 密文 COM 解密)
