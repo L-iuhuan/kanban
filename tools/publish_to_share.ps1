@@ -78,7 +78,7 @@ $shareHash = ""
 $verFile = Join-Path $dst "version.txt"
 if (Test-Path $verFile) {
   $shareVer = [IO.File]::ReadAllText($verFile)
-  if ($shareVer -match '^v(\S+?)\s+@') { $shareHash = $Matches[1].Trim() }
+  if ($shareVer -match '^[vV](\S+?)\s+@') { $shareHash = $Matches[1].Trim() }
 }
 $shareDisplay = if ($shareHash) { $shareHash } else { "(无有效哈希)" }
 $continuePublish = $true
@@ -120,7 +120,7 @@ if ($LASTEXITCODE -gt 7) {
 }
 
 # ── 2. 生成版本号(优先 git commit 短哈希,仓库不可用时用时间戳) ──
-$ver = "v$hash @ $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
+$ver = "V$hash @ $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
 [IO.File]::WriteAllText((Join-Path $dst "version.txt"), $ver)
 Write-Output "[2/4] 版本号已写入: $ver"
 
@@ -148,6 +148,7 @@ if (Test-Path $requirements) {
       "scikit-learn"     { $item = "sklearn" }
       "python-calamine"  { $item = "python_calamine" }
       "chinese-calendar" { $item = "chinese_calendar" }
+      "pywin32"          { $item = "win32com" }
     }
     $deps += $item
   }

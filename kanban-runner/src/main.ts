@@ -702,7 +702,7 @@ async function refreshStatus() {
     hasOutput = s.has_output;
     setAppState(appState);
     setVersionBadge(s.synced ? s.version : "未同步");
-    byIdText("app-version-text", "当前版本 v" + s.app_version);
+    byIdText("app-version-text", "当前版本 V" + s.app_version);
     const net = byId("net-status");
     const netText = byId("net-text");
     net.classList.remove("ok", "bad");

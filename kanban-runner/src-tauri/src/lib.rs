@@ -307,7 +307,7 @@ fn check_app_update(share_path: &str) -> Option<String> {
 /// 朴素 semver 比较:remote 是否比 current 新(按 . 分段数值比较,允许 v 前缀)
 fn version_newer(remote: &str, current: &str) -> bool {
     fn parts(s: &str) -> Vec<u32> {
-        s.trim_start_matches('v')
+        s.trim_start_matches('v').trim_start_matches('V')
             .split('.')
             .map(|p| p.parse().unwrap_or(0))
             .collect()
