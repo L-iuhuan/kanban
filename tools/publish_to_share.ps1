@@ -133,13 +133,17 @@ $keepTop = @($whitelistDirs + @("dashboard", "data_warehouse") + $whitelistFiles
 Write-Output "[1/4] 同步代码(白名单最小集): $SourceDir -> $dst"
 if ($DryRun) {
   Write-Output "  [干跑] 将同步(白名单):"
-  foreach ($d in $whitelistDirs) { Write-Output "    目录  $d\  (robocopy /MIR, 排 __pycache__/*.pyc)" }
+  foreach ($d in $whitelistDirs) { Write-Output "    目录  $d\  (robocopy /MIR, 排 __pycache__/output/*.pyc)" }
   Write-Output "    目录  dashboard\  (robocopy /MIR, 排 __pycache__/*.pyc/*.html/preagg.json + 补拷 template.html)"
   foreach ($f in $whitelistFiles) { Write-Output "    文件  $f" }
   Write-Output "    文件  version.txt / deps.txt  (脚本直写, 不经 robocopy)"
 } else {
   foreach ($d in $whitelistDirs) {
-    robocopy (Join-Path $SourceDir $d) (Join-Path $dst $d) /MIR /XD __pycache__ /XF *.pyc /R:1 /W:1 /NFL /NDL /NJH /NP /MT:8 | Out-Null
+    # r21b：/XD 追加 output——processing\output\ 是本地运行产物（silver 行级明文/gold CSV/报告），
+    # 曾随 processing\ 整目录镜像上共享盘（实锤 silver_cleaned_rows.parquet 18.9MB 明文在盘），
+    # 与"明文不出本机"红线冲突；robocopy /XD 按名匹配任意深度。已上盘的 processing\output\
+    # 需一次性手工清理（/XD 排除项不会被 /MIR 删除）。
+    robocopy (Join-Path $SourceDir $d) (Join-Path $dst $d) /MIR /XD __pycache__ output /XF *.pyc /R:1 /W:1 /NFL /NDL /NJH /NP /MT:8 | Out-Null
     if ($LASTEXITCODE -gt 7) { Write-Error "目录同步失败 (robocopy $LASTEXITCODE): $d"; exit 1 }
   }
   robocopy (Join-Path $SourceDir "dashboard") (Join-Path $dst "dashboard") /MIR /XD __pycache__ /XF *.html *.pyc preagg.json /R:1 /W:1 /NFL /NDL /NJH /NP /MT:8 | Out-Null
