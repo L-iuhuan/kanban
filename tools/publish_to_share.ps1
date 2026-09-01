@@ -128,7 +128,7 @@ if (Test-Path $personnel) {
 # (模板是必须保留的;generated dashboard_a.html/preagg.json/template_risk_test.html 等一律不同步)。
 $whitelistDirs = @("processing")
 $whitelistFiles = @("run_chain.py", "requirements.txt", "chain_config.json", "部门-人员-职务对应.md")
-$keepTop = @($whitelistDirs + "dashboard" + $whitelistFiles + @("version.txt", "deps.txt"))
+$keepTop = @($whitelistDirs + @("dashboard", "data_warehouse") + $whitelistFiles + @("version.txt", "deps.txt"))
 
 Write-Output "[1/4] 同步代码(白名单最小集): $SourceDir -> $dst"
 if ($DryRun) {
@@ -145,6 +145,18 @@ if ($DryRun) {
   robocopy (Join-Path $SourceDir "dashboard") (Join-Path $dst "dashboard") /MIR /XD __pycache__ /XF *.html *.pyc preagg.json /R:1 /W:1 /NFL /NDL /NJH /NP /MT:8 | Out-Null
   if ($LASTEXITCODE -gt 7) { Write-Error "dashboard 同步失败 (robocopy $LASTEXITCODE)"; exit 1 }
   Copy-Item (Join-Path $SourceDir "dashboard\template.html") (Join-Path $dst "dashboard\template.html") -Force
+  # ── r21 快照仓随发布分发（方案B 加密容器）：只上 .kbdat + manifest.json，
+  # 明文 *.parquet 绝不出本机（/XF 排除项不拷贝也不删除，共享盘上只有容器形态）。
+  # 壳端 robocopy /MIR 会把 kbdat+manifest 镜像到客户端 code\data_warehouse\，
+  # find_matching_snapshot 命中后内存解密直读，客户端彻底绕开本机 COM。──
+  $whSrc = Join-Path $SourceDir "data_warehouse"
+  if (Test-Path $whSrc) {
+    Write-Output "[1/4] 快照仓分发(仅加密容器+manifest): data_warehouse\ -> code\data_warehouse\"
+    robocopy $whSrc (Join-Path $dst "data_warehouse") /MIR /XF *.parquet /R:1 /W:1 /NFL /NDL /NJH /NP /MT:8 | Out-Null
+    if ($LASTEXITCODE -gt 7) { Write-Error "data_warehouse 同步失败 (robocopy $LASTEXITCODE)"; exit 1 }
+  } else {
+    Write-Output "  [跳过] 本地无 data_warehouse（未 ingest），不发布快照仓"
+  }
   foreach ($f in $whitelistFiles) {
     $srcF = Join-Path $SourceDir $f
     if (Test-Path $srcF) { Copy-Item $srcF (Join-Path $dst $f) -Force }
