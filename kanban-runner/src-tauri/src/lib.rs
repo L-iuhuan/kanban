@@ -543,6 +543,10 @@ async fn sync_code(app: AppHandle) -> Result<SyncResult, String> {
                 ".git",
                 "output",
                 "data",
+                // data_warehouse（0.3.22）：快照仓随 code\ 下发（.kbdat+manifest），
+                // 但客户端本机 COM 成功后注入的快照不在共享盘上——/MIR 会把它们当
+                // 多余项清掉，导致同月重跑回落慢通道。排除后本地快照跨同步保留。
+                "data_warehouse",
                 "__pycache__",
                 ".venv",
                 ".pytest_cache",
@@ -703,10 +707,13 @@ async fn run_pipeline(
             std::thread::spawn(move || {
                 let reader = BufReader::new(stderr);
                 for line in reader.lines().map_while(Result::ok) {
+                    // 0.3.22：流水线把"正忙等待重试/通道切换"等信息打在 stderr（r21 可观测），
+                    // 全标 error 会造成恐慌；[兼容读取] 前缀的降为 warn，其余（traceback 等）仍 error
+                    let level = if line.contains("[兼容读取]") { "warn" } else { "error" };
                     let _ = app2.emit(
                         "pipeline-log",
                         LogLine {
-                            level: "error".into(),
+                            level: level.into(),
                             text: line,
                         },
                     );
