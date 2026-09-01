@@ -867,21 +867,30 @@ async fn stop_pipeline(
 // ── 打开看板 / 产物 ───────────────────────────────────
 #[tauri::command]
 async fn open_dashboard() -> Result<String, String> {
-    let dir = data_root().join("code").join("dashboard");
+    let code = data_root().join("code");
+    // 0.3.23(r23)：看板产物新家 output\dashboard\（同步树外，重启/同步不再被 /MIR 清掉）；
+    // 兼容旧 dashboard\ 存量产物；两处都跳过模板/测试页（template*.html、*_test*.html），
+    // 取 mtime 最新的生成看板。
     let mut latest: Option<(std::time::SystemTime, PathBuf)> = None;
-    for entry in fs::read_dir(&dir).map_err(|e| format!("读取目录失败: {e}"))? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let p = entry.path();
-        if p.extension().and_then(|e| e.to_str()) == Some("html") {
+    for dir in [code.join("output").join("dashboard"), code.join("dashboard")] {
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("html") {
+                continue;
+            }
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with("template") || name.contains("_test") {
+                continue;
+            }
             let mtime = entry
                 .metadata()
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);
-            if latest
-                .as_ref()
-                .map(|(t, _)| mtime > *t)
-                .unwrap_or(true)
-            {
+            if latest.as_ref().map(|(t, _)| mtime > *t).unwrap_or(true) {
                 latest = Some((mtime, p));
             }
         }
