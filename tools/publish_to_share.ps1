@@ -13,6 +13,7 @@
 param(
   [string]$SourceDir = "E:\3-其他资料\数据分析\sales_analytics_platform",
   [string]$ShareRoot = "",
+  [string]$DataShareRoot = "",
   [string]$AppInstaller = "",
   [string]$AppVersion = "",
   [switch]$Force,
@@ -128,7 +129,9 @@ if (Test-Path $personnel) {
 # (模板是必须保留的;generated dashboard_a.html/preagg.json/template_risk_test.html 等一律不同步)。
 $whitelistDirs = @("processing")
 $whitelistFiles = @("run_chain.py", "requirements.txt", "chain_config.json", "部门-人员-职务对应.md")
-$keepTop = @($whitelistDirs + @("dashboard", "data_warehouse") + $whitelistFiles + @("version.txt", "deps.txt"))
+# r22：data_warehouse 移出代码盘保留名单——快照分发改走数据共享盘 D1；对账清理会把
+# 代码盘上 r21 遗留的 data_warehouse 目录按非白名单项自动删除（一次性迁移，见上方日志）
+$keepTop = @($whitelistDirs + @("dashboard") + $whitelistFiles + @("version.txt", "deps.txt"))
 
 Write-Output "[1/4] 同步代码(白名单最小集): $SourceDir -> $dst"
 if ($DryRun) {
@@ -149,15 +152,18 @@ if ($DryRun) {
   robocopy (Join-Path $SourceDir "dashboard") (Join-Path $dst "dashboard") /MIR /XD __pycache__ /XF *.html *.pyc preagg.json /R:1 /W:1 /NFL /NDL /NJH /NP /MT:8 | Out-Null
   if ($LASTEXITCODE -gt 7) { Write-Error "dashboard 同步失败 (robocopy $LASTEXITCODE)"; exit 1 }
   Copy-Item (Join-Path $SourceDir "dashboard\template.html") (Join-Path $dst "dashboard\template.html") -Force
-  # ── r21 快照仓随发布分发（方案B 加密容器）：只上 .kbdat + manifest.json，
-  # 明文 *.parquet 绝不出本机（/XF 排除项不拷贝也不删除，共享盘上只有容器形态）。
-  # 壳端 robocopy /MIR 会把 kbdat+manifest 镜像到客户端 code\data_warehouse\，
-  # find_matching_snapshot 命中后内存解密直读，客户端彻底绕开本机 COM。──
+  # ── r22 快照仓分发改走数据共享盘（D1经营分析，财务受控 ACL）：密文与代码（含解密
+  # 钥匙）分家，代码盘不再携带任何数据。只上 .kbdat + manifest.json（/XF *.parquet，
+  # 明文不出本机）；客户端流水线 find_snapshot_local_or_share 本地 miss 后 UNC 直读。
+  # 路径解析与流水线/ingest 同源：-DataShareRoot > 环境变量 SALES_DATA_SHARE_DIR > 内置默认。
+  $dataShare = $DataShareRoot
+  if (-not $dataShare) { $dataShare = $env:SALES_DATA_SHARE_DIR }
+  if (-not $dataShare) { $dataShare = '\\192.168.8.3\财务部\财务电子档案备份\D1经营分析' }
   $whSrc = Join-Path $SourceDir "data_warehouse"
   if (Test-Path $whSrc) {
-    Write-Output "[1/4] 快照仓分发(仅加密容器+manifest): data_warehouse\ -> code\data_warehouse\"
-    robocopy $whSrc (Join-Path $dst "data_warehouse") /MIR /XF *.parquet /R:1 /W:1 /NFL /NDL /NJH /NP /MT:8 | Out-Null
-    if ($LASTEXITCODE -gt 7) { Write-Error "data_warehouse 同步失败 (robocopy $LASTEXITCODE)"; exit 1 }
+    Write-Output "[1/4] 快照仓分发(仅加密容器+manifest): data_warehouse\ -> $dataShare\data_warehouse\"
+    robocopy $whSrc (Join-Path $dataShare 'data_warehouse') /MIR /XF *.parquet /R:1 /W:1 /NFL /NDL /NJH /NP /MT:8 | Out-Null
+    if ($LASTEXITCODE -gt 7) { Write-Error "data_warehouse 同步到数据共享盘失败 (robocopy $LASTEXITCODE)"; exit 1 }
   } else {
     Write-Output "  [跳过] 本地无 data_warehouse（未 ingest），不发布快照仓"
   }
