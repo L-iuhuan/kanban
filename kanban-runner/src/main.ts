@@ -343,8 +343,14 @@ function setDataFile(path: string | null) {
     byId("data-file-name").textContent = name;
     byId("data-file-path").textContent = path;
     dataFileEl.hidden = false;
+    // 0.3.24：选中/拉取即亮出数据条（跑批后被 [DATA-ID] 身份细化覆盖）
+    const idRow = byId("data-id-row");
+    byId("data-id-text").textContent = "已选数据 · " + name;
+    idRow.classList.remove("stale");
+    idRow.hidden = false;
   } else {
     dataFileEl.hidden = true;
+    byId("data-id-row").hidden = true;
   }
 }
 
@@ -909,6 +915,27 @@ listen<LogLine>("pipeline-log", (e) => {
         }
       }
     }
+  }
+});
+// ── 0.3.24(r24)：数据身份（流水线 [DATA-ID] 单行 JSON 上报 → 状态条）──
+listen<string>("data-identity", (e) => {
+  try {
+    const d = JSON.parse(e.payload);
+    const parts: string[] = [];
+    if (d.source_name) parts.push(d.source_name);
+    if (d.source_mtime_str) parts.push("修改于 " + d.source_mtime_str);
+    if (d.channel_str) parts.push(d.channel_str);
+    if (d.row_count != null) parts.push(Number(d.row_count).toLocaleString() + " 行");
+    const fr = d.freshness || {};
+    if (fr.is_stale) {
+      parts.push("⚠ 共享盘有更新: " + (fr.newest_share_file || "") + "（" + (fr.newest_share_mtime_str || "") + "）");
+    }
+    const idRow = byId("data-id-row");
+    byId("data-id-text").textContent = "数据身份 · " + parts.join(" · ");
+    idRow.classList.toggle("stale", !!fr.is_stale);
+    idRow.hidden = false;
+  } catch (err) {
+    appendLog("warn", "数据身份解析失败: " + err);
   }
 });
 listen<StageEvent>("pipeline-stage", (e) => {

@@ -689,6 +689,11 @@ async fn run_pipeline(
                     if let Some(stage) = parse_stage(&line) {
                         let _ = app2.emit("pipeline-stage", &stage);
                     }
+                    // 0.3.24(r24)：数据身份单行 JSON 标记 → 状态条事件；原始行不进日志面板
+                    if let Some(rest) = line.strip_prefix("[DATA-ID] ") {
+                        let _ = app2.emit("data-identity", rest.to_string());
+                        continue;
+                    }
                     let _ = app2.emit(
                         "pipeline-log",
                         LogLine {
