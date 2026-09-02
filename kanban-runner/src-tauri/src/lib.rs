@@ -1460,7 +1460,11 @@ fn ensure_chinese_shortcuts(app: &AppHandle) {
     for dir in dirs {
         let en = dir.join("KanbanAssistant.lnk");
         let zh = dir.join("看板助手.lnk");
-        if en.is_file() && !zh.exists() {
+        if !en.is_file() {
+            continue; // 无英文名（全新装已改过/用户自删）→ 不动
+        }
+        if !zh.exists() {
+            // 全新安装：改名即达
             match std::fs::rename(&en, &zh) {
                 Ok(()) => emit_log(
                     app,
@@ -1469,8 +1473,24 @@ fn ensure_chinese_shortcuts(app: &AppHandle) {
                 ),
                 Err(e) => emit_log(app, "warn", format!("快捷方式改名失败（{}）: {e}", en.display())),
             }
+        } else {
+            // 0.3.25 修（用户实报升级后双图标）：安装器每次升级都重造英文名快捷方式，
+            // 旧逻辑"两者都在→静默跳过"留下双图标（新图标英文名）。改为：用新造 lnk
+            // 覆盖中文名（目标始终指向本次安装，顺带治愈指向旧目录的死快捷方式），
+            // 再删英文名——桌面/开始菜单始终只有一个「看板助手」。
+            match std::fs::copy(&en, &zh).and_then(|_| std::fs::remove_file(&en)) {
+                Ok(_) => emit_log(
+                    app,
+                    "info",
+                    "检测到升级后重复的英文快捷方式，已合并为中文名（指向本次安装）".into(),
+                ),
+                Err(e) => emit_log(
+                    app,
+                    "warn",
+                    format!("重复快捷方式合并失败（{}）: {e}", en.display()),
+                ),
+            }
         }
-        // 两者都在/都不在 → 静默跳过
     }
 }
 

@@ -170,6 +170,21 @@ body{background:var(--bg-image)}
 /* 设置弹层-运行器更新行 */
 .update-line{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text)}
 
+/* 设置弹层:三段分组信息架构(共享盘位置 / 同步与运行 / 关于与更新) */
+.settings-modal{width:480px;padding:24px 26px 18px}
+.settings-modal h3{margin-bottom:6px}
+.settings-group{padding:16px 0;border-top:1px solid var(--card-border)}
+.settings-group:first-of-type{border-top:none;padding-top:12px}
+.settings-group-title{font-size:11.5px;font-weight:600;letter-spacing:1px;color:var(--text-dim);margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.settings-group-title::before{content:"";width:12px;height:2px;border-radius:1px;background:var(--accent)}
+.settings-group .field{margin-bottom:14px;font-size:12.5px}
+.settings-group .field:last-child{margin-bottom:0}
+.field-tip{font-size:11.5px;color:var(--text-dim);opacity:.85;line-height:1.5}
+.settings-switch{font-size:13px;color:var(--text);gap:10px;padding:2px 4px}
+.settings-switch .switch-text{line-height:1.4}
+.settings-switch small{display:block;font-size:11.5px;color:var(--text-dim);margin-top:2px;font-weight:400}
+.settings-modal .modal-actions{margin-top:6px;padding-top:16px;border-top:1px solid var(--card-border)}
+
 /* 「更新代码」检测到新代码时的呼吸高亮 */
 .btn.attention{animation:pulse-sync 1.6s ease-in-out infinite;border-color:var(--accent)}
 @keyframes pulse-sync{0%,100%{box-shadow:0 0 0 0 rgba(123,108,255,0)}50%{box-shadow:0 0 12px 2px rgba(123,108,255,.55)}}

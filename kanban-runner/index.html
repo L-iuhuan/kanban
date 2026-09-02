@@ -155,25 +155,32 @@
     <!-- Toast 轻提示容器(瞬时反馈,自动消失) -->
     <div class="toast-zone" id="toast-zone" aria-live="polite"></div>
 
-    <!-- 设置弹层 -->
+    <!-- 设置弹层:三段分组(共享盘位置 / 同步与运行 / 关于与更新) -->
     <div class="modal-mask" id="settings-modal" hidden>
-      <div class="modal">
+      <div class="modal settings-modal">
         <h3><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> 设置</h3>
-        <label class="field">
-          <span>共享盘代码目录(UNC 或本地路径)</span>
-          <input type="text" id="share-path-input" placeholder="例:\\server\share\kanban-repo 或 D:\kanban-share" />
-        </label>
-        <label class="field">
-          <span>数据文件共享目录</span>
-          <input type="text" id="cfg-data-share-path" placeholder="留空 = 内置默认(D1经营分析共享夹)" />
-        </label>
-        <div class="update-hint">Excel 数据文件的存放位置，与代码更新目录相互独立</div>
-        <label class="checkbox-row">
-          <input type="checkbox" id="opt-auto-sync" checked />
-          <span>启动时自动同步代码</span>
-        </label>
-        <div class="field">
-          <span>运行器更新(本应用自身的版本)</span>
+        <div class="settings-group">
+          <div class="settings-group-title">共享盘位置</div>
+          <label class="field">
+            <span>代码共享盘</span>
+            <input type="text" id="share-path-input" placeholder="例:\\server\share\kanban-repo 或 D:\kanban-share" />
+            <span class="field-tip">填开发同事发布的看板代码目录，应用会从这里拉取最新代码</span>
+          </label>
+          <label class="field">
+            <span>数据共享盘(可选)</span>
+            <input type="text" id="cfg-data-share-path" placeholder="留空 = 内置默认(D1经营分析共享夹)" />
+            <span class="field-tip">每月 Excel 数据文件投放的目录，和代码目录互不相干</span>
+          </label>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">同步与运行</div>
+          <label class="checkbox-row settings-switch">
+            <input type="checkbox" id="opt-auto-sync" checked />
+            <span class="switch-text">启动时自动同步代码<small>每次打开应用先拉取一次最新代码，建议保持开启</small></span>
+          </label>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">关于与更新</div>
           <div class="update-line">
             <span id="app-version-text">当前版本 v—</span>
             <button id="btn-check-update" class="mini-btn">检查更新</button>
