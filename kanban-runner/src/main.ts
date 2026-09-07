@@ -783,11 +783,12 @@ byId("btn-save-config").addEventListener("click", async () => {
   }
 });
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !settingsModal.hidden) settingsModal.hidden = true;
-  if (e.key === "Escape" && !sharePicker.hidden) sharePicker.hidden = true;
+  // 弹出层(色板/列菜单)Esc 统一关闭,优先于其它层级
+  if (e.key === "Escape" && openPopup) closePopup();
+  else if (e.key === "Escape" && !settingsModal.hidden) settingsModal.hidden = true;
+  else if (e.key === "Escape" && !sharePicker.hidden) sharePicker.hidden = true;
   // 抽屉优先于编辑器关闭;编辑器走未保存拦截
-  const drawerMask = byId("re-drawer-mask");
-  if (e.key === "Escape" && !drawerMask.hidden) closeDrawer();
+  else if (e.key === "Escape" && !byId("re-drawer-mask").hidden) closeDrawer();
   else if (e.key === "Escape" && !byId("risk-modal").hidden) tryCloseRiskEditor();
 });
 byId("share-path-input").addEventListener("keydown", (e) => {
@@ -1144,41 +1145,103 @@ function destroyRiskSortables() {
   riskSortables = [];
 }
 
-/** 语义色板(details 下拉,按钮式色块不含 emoji);onPick 选中后自动收起 */
-function buildColorPalette(current: string, onPick: (c: string) => void): HTMLDetailsElement {
-  const det = document.createElement("details");
-  det.className = "re-colors";
-  const sum = document.createElement("summary");
-  sum.className = "s-" + current;
-  sum.title = "语义标色";
-  det.appendChild(sum);
-  const pal = document.createElement("div");
-  pal.className = "re-palette";
-  for (const c of SEMANTIC_COLORS) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "p-" + c;
-    b.title = c === "none" ? "清除颜色" : (riskDoc?.legend?.[c] ?? c);
-    b.addEventListener("click", () => {
-      det.open = false;
-      onPick(c);
-    });
-    pal.appendChild(b);
+// ── 统一弹出层管理(修复:色板/列菜单等浮层点击外部不消失) ──
+// 单一 document mousedown 监听 + 当前打开弹出注册表:打开新弹出先关旧,
+// 点击弹出外部任意处/Esc 统一关闭;所有浮层(色板/列菜单)共用,不再各写一套
+let openPopup: { el: HTMLElement; close: () => void } | null = null;
+function closePopup() {
+  if (openPopup) {
+    openPopup.close();
+    openPopup = null;
   }
-  det.appendChild(pal);
-  return det;
+}
+function togglePopup(wrap: HTMLElement, panel: HTMLElement, open: () => void) {
+  if (openPopup && openPopup.el === wrap) {
+    closePopup();
+    return;
+  }
+  closePopup();
+  // 关闭即清空面板内容(懒构建配套):同一时刻 DOM 中只存在已打开面板的选项,
+  // 规避隐藏面板的色块/菜单项被全局选择器(如 .p-red)误点——CDP 实测断链根因
+  openPopup = { el: wrap, close: () => { panel.hidden = true; panel.innerHTML = ""; } };
+  open();
+}
+document.addEventListener("mousedown", (e) => {
+  if (openPopup && !openPopup.el.contains(e.target as Node)) closePopup();
+});
+/** 浮层定位:position:fixed 挂视口(先脱离文档流,防流内重排致锚点漂移);右缘越界左移;
+ *  下方空间不足自动翻转到锚点上方(防面板出视口不可点) */
+function placePopup(panel: HTMLElement, anchor: HTMLElement, alignRight: boolean) {
+  panel.style.position = "fixed";
+  panel.style.zIndex = "80";
+  const r = anchor.getBoundingClientRect();
+  panel.style.left = alignRight ? "auto" : Math.max(8, Math.min(r.left, window.innerWidth - 150)) + "px";
+  panel.style.right = alignRight ? Math.max(8, window.innerWidth - r.right) + "px" : "auto";
+  // 先放屏外量高,再决定放锚点下方 or 上方
+  panel.style.top = "-9999px";
+  const h = panel.getBoundingClientRect().height || 30;
+  const belowOk = r.bottom + 4 + h <= window.innerHeight - 8;
+  panel.style.top = (belowOk ? r.bottom + 4 : Math.max(8, r.top - h - 4)) + "px";
 }
 
-/** 表格列头菜单:右插列/删列/改名;核心列(locked)置灰并提示 */
-function buildColMenu(table: RiskTable, colIdx: number): HTMLDetailsElement {
-  const det = document.createElement("details");
-  det.className = "th-menu";
-  const sum = document.createElement("summary");
+/** 语义色板(统一弹出层:点色块外/Esc 自动关);面板懒构建,选色即写回数据模型并即时同步状态点 */
+function buildColorPalette(current: string, onPick: (c: string) => void): HTMLElement {
+  const wrap = document.createElement("span");
+  wrap.className = "re-colors";
+  const dot = document.createElement("button");
+  dot.type = "button";
+  dot.className = "s-" + current;
+  dot.title = "语义标色";
+  const pal = document.createElement("span");
+  pal.className = "re-palette";
+  pal.hidden = true;
+  // 懒构建:打开时才生成色块,关闭即清空(见 togglePopup)——隐藏面板的色块不在 DOM,
+  // 全局选择器(如 .p-red)只会命中当前打开的面板(实测断链根因修复)
+  const fill = () => {
+    pal.innerHTML = "";
+    for (const c of SEMANTIC_COLORS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "p-" + c;
+      b.title = c === "none" ? "清除颜色" : (riskDoc?.legend?.[c] ?? c);
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        closePopup();
+        // 即时反馈①:状态色点按钮类同步(所有色板通用,不依赖外层重渲染)
+        dot.className = "s-" + c;
+        onPick(c);
+      });
+      pal.appendChild(b);
+    }
+  };
+  dot.addEventListener("click", (e) => {
+    e.stopPropagation();
+    togglePopup(wrap, pal, () => {
+      fill();
+      pal.hidden = false;
+      // 先脱离文档流再读锚点 rect:面板在流内可见会撑开表格触发同步重排,
+      // 导致锚点坐标在测量瞬间漂移(实测浮层错位 376px 的根因)
+      pal.style.position = "fixed";
+      placePopup(pal, dot, false);
+    });
+  });
+  wrap.appendChild(dot);
+  wrap.appendChild(pal);
+  return wrap;
+}
+
+/** 表格列头菜单:右插列/删列/改名;核心列(locked)置灰并提示(统一弹出层管理) */
+function buildColMenu(table: RiskTable, colIdx: number): HTMLElement {
+  const wrap = document.createElement("span");
+  wrap.className = "th-menu";
+  const sum = document.createElement("button");
+  sum.type = "button";
+  sum.className = "th-menu-btn";
   sum.title = "列操作";
   sum.textContent = "⋮";
-  det.appendChild(sum);
   const list = document.createElement("div");
   list.className = "th-menu-list";
+  list.hidden = true;
   const locked = colLocked(table, colIdx);
   const name = table.columns[colIdx] ?? "";
   const mkBtn = (label: string, disabled: boolean, tip: string, fn: () => void) => {
@@ -1188,64 +1251,87 @@ function buildColMenu(table: RiskTable, colIdx: number): HTMLDetailsElement {
     b.disabled = disabled;
     b.title = tip;
     b.addEventListener("click", () => {
-      det.open = false;
+      closePopup();
       fn();
     });
     return b;
   };
-  list.appendChild(
-    mkBtn("右侧插入列", false, "在此列右侧新增一列", () => {
-      const newName = window.prompt("新列名", "新列");
-      if (newName === null) return;
-      const n = newName.trim() || "新列";
-      table.columns.splice(colIdx + 1, 0, n);
-      table.col_meta.splice(colIdx + 1, 0, { name: n, locked: false });
-      table.rows.forEach((r) => r.cells.splice(colIdx + 1, 0, { text: "", color: "none" }));
-      markRiskDirty();
-      renderRiskAll();
-    })
-  );
-  list.appendChild(
-    mkBtn(
-      "删除此列",
-      locked,
-      locked ? "核心列,禁止删除(P0-5 保护)" : "删除「" + name + "」列",
-      () => {
-        if (locked) return;
-        if (!window.confirm("确定删除列「" + name + "」?该列所有内容将一并移除。")) return;
-        table.columns.splice(colIdx, 1);
-        table.col_meta.splice(colIdx, 1);
-        table.rows.forEach((r) => r.cells.splice(colIdx, 1));
+  // 懒构建:打开时才生成菜单项,关闭即清空(见 togglePopup)
+  const fill = () => {
+    list.innerHTML = "";
+    list.appendChild(
+      mkBtn("右侧插入列", false, "在此列右侧新增一列", () => {
+        const newName = window.prompt("新列名", "新列");
+        if (newName === null) return;
+        const n = newName.trim() || "新列";
+        table.columns.splice(colIdx + 1, 0, n);
+        table.col_meta.splice(colIdx + 1, 0, { name: n, locked: false });
+        table.rows.forEach((r) => r.cells.splice(colIdx + 1, 0, { text: "", color: "none" }));
         markRiskDirty();
         renderRiskAll();
-      }
-    )
-  );
-  list.appendChild(
-    mkBtn(
-      "重命名",
-      locked,
-      locked ? "核心列,禁止改名(P0-5 保护)" : "修改列名",
-      () => {
-        if (locked) return;
-        const nn = window.prompt("新的列名", name);
-        if (nn === null) return;
-        const n = nn.trim();
-        if (!n || n === name) return;
-        table.columns[colIdx] = n;
-        if (table.col_meta[colIdx]) table.col_meta[colIdx].name = n;
-        else table.col_meta[colIdx] = { name: n, locked: false };
-        markRiskDirty();
-        renderRiskAll();
-      }
-    )
-  );
-  det.appendChild(list);
-  return det;
+      })
+    );
+    list.appendChild(
+      mkBtn(
+        "删除此列",
+        locked,
+        locked ? "核心列,禁止删除(P0-5 保护)" : "删除「" + name + "」列",
+        () => {
+          if (locked) return;
+          if (!window.confirm("确定删除列「" + name + "」?该列所有内容将一并移除。")) return;
+          table.columns.splice(colIdx, 1);
+          table.col_meta.splice(colIdx, 1);
+          table.rows.forEach((r) => r.cells.splice(colIdx, 1));
+          markRiskDirty();
+          renderRiskAll();
+        }
+      )
+    );
+    list.appendChild(
+      mkBtn(
+        "重命名",
+        locked,
+        locked ? "核心列,禁止改名(P0-5 保护)" : "修改列名",
+        () => {
+          if (locked) return;
+          const nn = window.prompt("新的列名", name);
+          if (nn === null) return;
+          const n = nn.trim();
+          if (!n || n === name) return;
+          table.columns[colIdx] = n;
+          if (table.col_meta[colIdx]) table.col_meta[colIdx].name = n;
+          else table.col_meta[colIdx] = { name: n, locked: false };
+          markRiskDirty();
+          renderRiskAll();
+        }
+      )
+    );
+  };
+  wrap.appendChild(sum);
+  wrap.appendChild(list);
+  sum.addEventListener("click", (e) => {
+    e.stopPropagation();
+    togglePopup(wrap, list, () => {
+      fill();
+      list.hidden = false;
+      list.style.position = "fixed"; // 先脱离文档流再定位(同色板,防流内重排致锚点漂移)
+      placePopup(list, sum, true);
+    });
+  });
+  return wrap;
 }
 
-/** 渲染一张动态列表格(风险表/行动表同构);行操作=拖拽+上下移+行级色+删除,单元格级色板+长文本抽屉 */
+/** 列类型分档(P0-1 列宽规范):枚举/日期/数值固定宽,文本弹性,操作列 92px */
+function riskColClass(name: string): string {
+  if (riskColEnum(name)) return "col-enum";
+  if (RISK_DATE_COL.test(name)) return "col-date";
+  if (RISK_NUM_COL.test(name)) return "col-num";
+  return "col-text";
+}
+
+/** 渲染一张动态列表格(风险表/行动表同构);行操作=拖拽+行级色+删除(拖拽替代上下移),单元格级色板+长文本抽屉 */
 function renderRiskTable(container: HTMLElement, table: RiskTable, label: string) {
+  destroyRiskSortables(); // 防多实例:每次渲染先销毁旧 Sortable(修复:行拖动动不了)
   container.innerHTML = "";
   // 结构自检:col_meta 与 columns 对齐(旧文件缺元数据时兜底)
   while (table.col_meta.length < table.columns.length) {
@@ -1257,10 +1343,12 @@ function renderRiskTable(container: HTMLElement, table: RiskTable, label: string
   const thead = document.createElement("thead");
   const hr = document.createElement("tr");
   const toolsTh = document.createElement("th");
+  toolsTh.className = "col-tools";
   toolsTh.innerHTML = '<div class="th-in" style="color:var(--text-faint)">操作</div>';
   hr.appendChild(toolsTh);
   table.columns.forEach((colName, ci) => {
     const th = document.createElement("th");
+    th.classList.add(riskColClass(colName));
     if (colLocked(table, ci)) th.classList.add("col-locked");
     const inn = document.createElement("div");
     inn.className = "th-in";
@@ -1273,6 +1361,7 @@ function renderRiskTable(container: HTMLElement, table: RiskTable, label: string
     hr.appendChild(th);
   });
   const addTh = document.createElement("th");
+  addTh.className = "col-add";
   const addInn = document.createElement("div");
   addInn.className = "th-in";
   const addBtn = document.createElement("button");
@@ -1303,41 +1392,33 @@ function renderRiskTable(container: HTMLElement, table: RiskTable, label: string
     if (row.style?.row_color && row.style.row_color !== "none") {
       tr.classList.add("row-c-" + row.style.row_color);
     }
-    // 行工具条:拖拽手柄 + 行级色 + 上移/下移 + 删除
+    // 行工具条:拖拽把手 + 行级色 + 删除(操作列 92px,P1-2)
     const toolTd = document.createElement("td");
+    toolTd.className = "col-tools";
     const tools = document.createElement("div");
     tools.className = "re-row-tools";
     const drag = document.createElement("button");
     drag.type = "button";
     drag.className = "re-drag";
-    drag.title = "拖拽排序";
-    drag.textContent = "≡";
+    drag.title = "按住拖拽排序";
+    drag.textContent = "⠿";
+    // 与单元格编辑事件隔离:按下把手即进入拖拽,不向单元格冒泡
+    drag.addEventListener("mousedown", (e) => e.stopPropagation());
     tools.appendChild(drag);
     tools.appendChild(
       buildColorPalette(row.style?.row_color ?? "none", (c) => {
         if (!row.style) row.style = { row_color: c };
         else row.style.row_color = c;
+        // 即时反馈②:直接切当前 tr 的行底色类(移除旧 row-c-*→条件加新类),
+        // 不依赖整表重渲染——保证选色后 UI 立即变色
+        for (const cls of Array.from(tr.classList)) {
+          if (cls.startsWith("row-c-")) tr.classList.remove(cls);
+        }
+        if (c !== "none") tr.classList.add("row-c-" + c);
         markRiskDirty();
-        renderRiskAll();
       })
     );
-    const mkMove = (delta: number, glyph: string, tip: string) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.title = tip;
-      b.textContent = glyph;
-      b.addEventListener("click", () => {
-        const ni = ri + delta;
-        if (ni < 0 || ni >= table.rows.length) return;
-        const [moved] = table.rows.splice(ri, 1);
-        table.rows.splice(ni, 0, moved);
-        markRiskDirty();
-        renderRiskAll();
-      });
-      return b;
-    };
-    tools.appendChild(mkMove(-1, "↑", "上移"));
-    tools.appendChild(mkMove(1, "↓", "下移"));
+    // P1-2:行工具条 92px 内收纳(拖拽把手+行级色+删除),↑↓ 移除——拖拽排序可替代
     const del = document.createElement("button");
     del.type = "button";
     del.className = "re-rm";
@@ -1356,6 +1437,7 @@ function renderRiskTable(container: HTMLElement, table: RiskTable, label: string
       const cell = row.cells[ci] ?? { text: "", color: "none" };
       if (!row.cells[ci]) row.cells[ci] = cell;
       const td = document.createElement("td");
+      td.classList.add(riskColClass(colName));
       if (cell.color && cell.color !== "none") td.classList.add("cell-c-" + cell.color);
       const enumOpts = riskColEnum(colName);
       if (enumOpts) {
@@ -1399,20 +1481,26 @@ function renderRiskTable(container: HTMLElement, table: RiskTable, label: string
           markRiskDirty();
         });
         td.appendChild(inp);
-        // 长文本宽幅抽屉入口(多条建议按全角｜拆行逐条编辑)
-        const exp = document.createElement("button");
-        exp.type = "button";
-        exp.className = "re-cell-expand";
-        exp.title = "宽幅编辑(多条内容按 ｜ 拆行)";
-        exp.textContent = "⤢";
-        exp.addEventListener("click", () => openDrawer(table, ri, ci, label));
-        td.appendChild(exp);
+        // P1-1:长文本宽幅抽屉入口仅在长文本列渲染(数值列不挂,避免三控件堆叠)
+        if (!RISK_NUM_COL.test(colName)) {
+          const exp = document.createElement("button");
+          exp.type = "button";
+          exp.className = "re-cell-expand";
+          exp.title = "宽幅编辑(多条内容按 ｜ 拆行)";
+          exp.textContent = "⤢";
+          exp.addEventListener("click", () => openDrawer(table, ri, ci, label));
+          td.appendChild(exp);
+        }
       }
       td.appendChild(
         buildColorPalette(cell.color ?? "none", (c) => {
           cell.color = c;
+          // 即时反馈②(格级同款断链一并修):直接切当前 td 的格级色类
+          for (const cls of Array.from(td.classList)) {
+            if (cls.startsWith("cell-c-")) td.classList.remove(cls);
+          }
+          if (c !== "none") td.classList.add("cell-c-" + c);
           markRiskDirty();
-          renderRiskAll();
         })
       );
       tr.appendChild(td);
@@ -1440,11 +1528,14 @@ function renderRiskTable(container: HTMLElement, table: RiskTable, label: string
     renderRiskAll();
   });
   container.appendChild(addRow);
-  // 行拖拽排序(SortableJS,P0-8;结束按 DOM 顺序回写 rows)
+  // 行拖拽排序(SortableJS,P0-8;forceFallback+ghost 挂 body 规避滚动容器裁剪;结束按 DOM 顺序回写 rows)
   riskSortables.push(
     new Sortable(tbody, {
       handle: ".re-drag",
+      draggable: "tr",
       animation: 150,
+      forceFallback: true,
+      fallbackOnBody: true,
       onEnd: () => {
         const order = Array.from(tbody.querySelectorAll("tr[data-ri]")).map((tr) =>
           Number((tr as HTMLTableRowElement).getAttribute("data-ri"))
@@ -1457,23 +1548,27 @@ function renderRiskTable(container: HTMLElement, table: RiskTable, label: string
   );
 }
 
-/** KPI 卡区渲染:卡片列表编辑(覆盖开关/来源/自定义卡增删/拖拽排序) + 8 列 grid 预览 */
+/** KPI 卡区渲染:双行卡片(主行=标题/数值/把手/删除;副行=副文本/级别色/人工定值开关)+ 8 列 grid 预览 */
 function renderKpiSection() {
+  destroyRiskSortables(); // 防多实例堆叠(修复:KPI 卡拖动动不了)
   const list = byId("re-kpi-list");
   const preview = byId("re-kpi-preview");
   list.innerHTML = "";
   preview.innerHTML = "";
   const cards = riskDoc?.kpi_cards ?? [];
-  const SRC_LABEL: Record<string, string> = { derived: "派生", override: "派生覆盖", custom: "自定义" };
   cards.forEach((card, i) => {
     const row = document.createElement("div");
     row.className = "re-kpi-card";
     row.setAttribute("data-ki", String(i));
+    // 主行:拖拽把手 + 标题 + 数值(收窄) + 删除
+    const main = document.createElement("div");
+    main.className = "re-kpi-main";
     const drag = document.createElement("span");
     drag.className = "re-drag";
-    drag.title = "拖拽排序";
-    drag.textContent = "≡";
-    row.appendChild(drag);
+    drag.title = "按住拖拽排序";
+    drag.textContent = "⠿";
+    drag.addEventListener("mousedown", (e) => e.stopPropagation());
+    main.appendChild(drag);
     const title = document.createElement("input");
     title.value = card.title;
     title.placeholder = "标题";
@@ -1482,69 +1577,19 @@ function renderKpiSection() {
       markRiskDirty();
       renderKpiPreview();
     });
-    row.appendChild(title);
+    main.appendChild(title);
     const value = document.createElement("input");
+    value.className = "re-kpi-value";
     value.value = card.value;
     value.title = card.source === "derived" ? "派生卡数值自动跟随表格计算(只读)" : "人工填写的数值";
+    value.readOnly = card.source === "derived";
+    if (card.source !== "derived") value.placeholder = "派生值 " + (card.derived_value ?? "");
     value.addEventListener("input", () => {
       card.value = value.value;
       markRiskDirty();
       renderKpiPreview();
     });
-    row.appendChild(value);
-    const sub = document.createElement("input");
-    sub.value = card.sub;
-    sub.placeholder = "副文本";
-    sub.addEventListener("input", () => {
-      card.sub = sub.value;
-      markRiskDirty();
-      renderKpiPreview();
-    });
-    row.appendChild(sub);
-    row.appendChild(
-      buildColorPalette(card.level ?? "none", (c) => {
-        card.level = c;
-        markRiskDirty();
-        renderKpiPreview();
-      })
-    );
-    const src = document.createElement("select");
-    (["derived", "override", "custom"] as const).forEach((s) => {
-      const o = document.createElement("option");
-      o.value = s;
-      o.textContent = SRC_LABEL[s];
-      src.appendChild(o);
-    });
-    src.value = card.source;
-    src.title = "派生=自动跟随表格;派生覆盖=人工定值;自定义=全字段人工";
-    src.addEventListener("change", () => {
-      card.source = src.value as RiskKpiCard["source"];
-      if (card.source === "derived") card.value = card.derived_value ?? card.value;
-      markRiskDirty();
-      renderKpiSection();
-    });
-    row.appendChild(src);
-    const tail = document.createElement("span");
-    tail.className = "re-kpi-src";
-    if (card.source === "derived") {
-      value.readOnly = true;
-      tail.textContent = "派生值 " + (card.derived_value ?? "");
-    } else if (card.source === "override") {
-      value.readOnly = false;
-      value.placeholder = "覆盖派生值 " + (card.derived_value ?? "");
-      tail.textContent = "派生值 " + (card.derived_value ?? "");
-    } else {
-      value.readOnly = false;
-      tail.textContent = SRC_LABEL[card.source] ?? card.source;
-    }
-    row.appendChild(tail);
-    if (card.stale) {
-      const stale = document.createElement("span");
-      stale.className = "re-kpi-stale";
-      stale.title = "人工值与当前表格计算结果不一致,不随表更新";
-      stale.textContent = "人工值·不随表更新";
-      row.appendChild(stale);
-    }
+    main.appendChild(value);
     const del = document.createElement("button");
     del.type = "button";
     del.className = "re-kpi-del";
@@ -1555,7 +1600,55 @@ function renderKpiSection() {
       markRiskDirty();
       renderKpiSection();
     });
-    row.appendChild(del);
+    main.appendChild(del);
+    row.appendChild(main);
+    // 副行:副文本 + 级别色点 + 人工定值开关 + 「人工值」角标
+    const subRow = document.createElement("div");
+    subRow.className = "re-kpi-sub2";
+    const sub = document.createElement("input");
+    sub.className = "re-kpi-sub";
+    sub.value = card.sub;
+    sub.placeholder = "副文本(卡片下方的小字说明)";
+    sub.addEventListener("input", () => {
+      card.sub = sub.value;
+      markRiskDirty();
+      renderKpiPreview();
+    });
+    subRow.appendChild(sub);
+    subRow.appendChild(
+      buildColorPalette(card.level ?? "none", (c) => {
+        card.level = c;
+        markRiskDirty();
+        renderKpiPreview();
+      })
+    );
+    // 覆盖开关(小白语义):勾选=人工定值;派生卡=自动跟随表格计算
+    const manual = document.createElement("label");
+    manual.className = "re-kpi-manual";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = card.source !== "derived";
+    cb.title = "勾选=人工定值(此数值不随表格自动更新);取消=自动跟随表格计算";
+    cb.addEventListener("change", () => {
+      if (card.source === "custom") card.source = cb.checked ? "custom" : "override";
+      else card.source = cb.checked ? "override" : "derived";
+      if (card.source === "derived") card.value = card.derived_value ?? card.value;
+      markRiskDirty();
+      renderKpiSection();
+    });
+    manual.appendChild(cb);
+    manual.appendChild(document.createTextNode("人工定值"));
+    subRow.appendChild(manual);
+    if (card.source !== "derived") {
+      const badge = document.createElement("span");
+      badge.className = "re-kpi-stale" + (card.stale ? " warn" : "");
+      badge.textContent = "人工值";
+      badge.title = card.stale
+        ? "人工值与当前表格计算结果不一致;此数值不随表格自动更新"
+        : "此数值不随表格自动更新";
+      subRow.appendChild(badge);
+    }
+    row.appendChild(subRow);
     list.appendChild(row);
   });
   // 布局预览:n=0 隐藏整条;否则 repeat(min(n,8),1fr) 同渲染端
@@ -1569,7 +1662,10 @@ function renderKpiSection() {
   riskSortables.push(
     new Sortable(list, {
       handle: ".re-drag",
+      draggable: ".re-kpi-card",
       animation: 150,
+      forceFallback: true,
+      fallbackOnBody: true,
       onEnd: () => {
         const order = Array.from(list.querySelectorAll(".re-kpi-card[data-ki]")).map((el) =>
           Number((el as HTMLElement).getAttribute("data-ki"))
@@ -1592,7 +1688,6 @@ function renderKpiPreview() {
   }
   preview.style.display = "";
   preview.style.gridTemplateColumns = "repeat(" + Math.min(cards.length, 8) + ",minmax(0,1fr))";
-  const SRC_LABEL: Record<string, string> = { derived: "派生", override: "覆盖", custom: "自定义" };
   cards.forEach((card) => {
     const pv = document.createElement("div");
     pv.className = "re-kpi-pv";
@@ -1607,7 +1702,8 @@ function renderKpiPreview() {
     v.appendChild(document.createTextNode(card.source === "derived" ? card.derived_value ?? card.value : card.value));
     const s = document.createElement("div");
     s.className = "s";
-    s.textContent = card.sub + (card.source !== "derived" ? " · " + (SRC_LABEL[card.source] ?? "") : "") + (card.stale ? " · 人工值不随表更新" : "");
+    // 小白语义:仅人工卡显示「人工值」角标;派生卡不显示任何来源标记(不渲染 source 枚举)
+    s.textContent = card.sub + (card.source !== "derived" ? " · 人工值" + (card.stale ? "(与表格不一致)" : "") : "");
     pv.appendChild(t);
     pv.appendChild(v);
     pv.appendChild(s);

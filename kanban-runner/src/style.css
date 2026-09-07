@@ -2,6 +2,10 @@
 /* 主题变量:默认暗色;[data-theme="light"] 覆盖为浅色。颜色一律走变量,勿硬编码 */
 :root{--bg:#0b0d18;--card:rgba(255,255,255,0.04);--card-border:rgba(255,255,255,0.09);--text:#e9ebf4;--text-dim:#9aa0b8;--text-faint:rgba(255,255,255,0.3);--accent:#7b6cff;--accent-2:#38c8ff;--ok:#34d399;--warn:#fbbf24;--err:#f87171;--mono:"Cascadia Code",Consolas,"Courier New",monospace;--line:rgba(255,255,255,0.16);--track:rgba(255,255,255,0.07);--btn-bg:rgba(255,255,255,0.07);--btn-hover:rgba(255,255,255,0.1);--inset-bg:rgba(0,0,0,0.32);--modal-bg:#141727;--titlebar-bg:rgba(11,13,24,0.6);--scroll:rgba(255,255,255,0.14);--scroll-hover:rgba(255,255,255,0.24);--log-text:#c6cbd9;--log-empty:rgba(255,255,255,0.25);--banner-err-text:#fecaca;--banner-info-text:#bfe9ff;--banner-ok-text:#b6f0d5;--bg-image:radial-gradient(640px 420px at 10% -12%,rgba(123,108,255,0.22),transparent 62%),radial-gradient(760px 520px at 106% 16%,rgba(56,200,255,0.13),transparent 62%),radial-gradient(900px 640px at 50% 120%,rgba(255,90,170,0.09),transparent 62%),#0b0d18;color-scheme:dark}
 :root[data-theme="light"]{--bg:#f3f5fa;--card:rgba(255,255,255,0.45);--card-border:rgba(20,28,48,0.09);--text:#232a3d;--text-dim:#5b6478;--text-faint:rgba(35,42,61,0.42);--accent:#6a5cf0;--accent-2:#1296d4;--ok:#12996e;--warn:#c98a04;--err:#d94b4b;--line:rgba(20,28,48,0.14);--track:rgba(20,28,48,0.08);--btn-bg:rgba(255,255,255,0.5);--btn-hover:rgba(255,255,255,0.75);--inset-bg:rgba(255,255,255,0.55);--modal-bg:rgba(255,255,255,0.92);--titlebar-bg:rgba(255,255,255,0.45);--scroll:rgba(20,28,48,0.18);--scroll-hover:rgba(20,28,48,0.28);--log-text:#3d465e;--log-empty:rgba(35,42,61,0.38);--banner-err-text:#b33636;--banner-info-text:#0c6e96;--banner-ok-text:#0e7a57;--bg-image:radial-gradient(640px 420px at 10% -12%,rgba(106,92,240,0.3),transparent 62%),radial-gradient(760px 520px at 106% 16%,rgba(18,150,212,0.24),transparent 62%),radial-gradient(900px 640px at 50% 120%,rgba(255,110,180,0.18),transparent 62%),radial-gradient(500px 380px at 85% 90%,rgba(52,211,153,0.14),transparent 62%),#f3f5fa;color-scheme:light}
+/* R 面语义标色:与看板渲染端 template.html 警示色系逐值对齐(单一真源,非自创)——
+   red=--danger #EF4444 / orange=--warning #F59E0B / green=--success #10B981 / gray=灰面;
+   修复编辑器预览与看板渲染两套色不一致;双主题共用(看板仅浅色) */
+:root{--r-red:#EF4444;--r-orange:#F59E0B;--r-green:#10B981;--r-gray:#94A3B8;--r-red-bg:rgba(239,68,68,0.09);--r-orange-bg:rgba(245,158,11,0.11);--r-green-bg:rgba(16,185,129,0.09);--r-gray-bg:rgba(148,163,184,0.16)}
 html,body{height:100%;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--text);overflow:hidden;user-select:none}
 body{background:var(--bg-image)}
 /* 浅色下卡片带一点浅阴影,配合半透明+模糊保持玻璃感 */
@@ -249,9 +253,9 @@ html.theme-switching *{transition:none !important}
 .risk-editor{width:min(1060px,94vw);height:min(88vh,820px);display:flex;flex-direction:column;padding:0;overflow:hidden}
 .re-head{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--card-border);flex-shrink:0}
 .re-head h3{font-size:15px;margin:0;flex-shrink:0}
-.re-month{background:var(--inset-bg);border:1px solid var(--card-border);border-radius:8px;padding:6px 10px;color:var(--text);font-size:12.5px;font-family:var(--mono);outline:none}
+.re-month{width:150px;background:var(--inset-bg);border:1px solid var(--card-border);border-radius:8px;padding:6px 10px;color:var(--text);font-size:12.5px;font-family:var(--mono);outline:none}
 .re-month:focus{border-color:var(--accent)}
-.re-meta{font-size:11.5px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.re-meta{font-size:11.5px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;max-width:40%}
 .re-head-actions{display:flex;gap:6px;flex-shrink:0}
 .re-status{margin:10px 18px 0;padding:8px 12px;border-radius:8px;font-size:12.5px;max-height:96px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;flex-shrink:0}
 .re-status.err{background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.35);color:var(--banner-err-text)}
@@ -262,17 +266,27 @@ html.theme-switching *{transition:none !important}
 .re-section.re-readonly{background:var(--inset-bg)}
 .re-sec-title{font-size:12.5px;font-weight:600;color:var(--text);margin-bottom:10px;display:flex;align-items:center;gap:10px;justify-content:space-between}
 .re-sec-title.re-sub{margin-top:14px;color:var(--text-dim);font-weight:400;font-size:11.5px}
-.re-raw{font-family:var(--mono);font-size:11.5px;color:var(--text-dim);white-space:pre-wrap;word-break:break-all;max-height:160px;overflow-y:auto;margin:0;user-select:text}
+.re-raw{font-family:var(--mono);font-size:11.5px;color:var(--text-dim);white-space:pre-wrap;word-break:break-all;max-height:96px;overflow-y:auto;margin:0;user-select:text}
 
-/* KPI 卡片编辑行 */
+/* KPI 卡片编辑:双行结构(P0-2 比例规范) */
 .re-kpi-list{display:flex;flex-direction:column;gap:8px}
-.re-kpi-card{display:grid;grid-template-columns:22px 1.1fr 1fr 1.4fr auto auto auto;gap:8px;align-items:center;background:var(--inset-bg);border:1px solid var(--card-border);border-radius:10px;padding:8px 10px}
-.re-kpi-card .re-drag{color:var(--text-faint);cursor:grab;display:flex;align-items:center;justify-content:center}
-.re-kpi-card input,.re-kpi-card select{background:transparent;border:1px solid var(--card-border);border-radius:6px;padding:5px 8px;color:var(--text);font-size:12.5px;outline:none;min-width:0}
-.re-kpi-card input:focus,.re-kpi-card select:focus{border-color:var(--accent)}
-.re-kpi-card input[readonly]{color:var(--text-dim);border-style:dashed}
-.re-kpi-src{font-size:11px;color:var(--text-dim);white-space:nowrap}
-.re-kpi-stale{font-size:10.5px;color:var(--warn);border:1px solid rgba(251,191,36,0.4);border-radius:8px;padding:1px 6px;white-space:nowrap}
+.re-kpi-card{display:flex;flex-direction:column;gap:8px;background:var(--inset-bg);border:1px solid var(--card-border);border-radius:10px;padding:8px 10px}
+.re-kpi-main{display:grid;grid-template-columns:22px minmax(0,2fr) minmax(120px,140px) 28px;gap:8px;align-items:center}
+.re-kpi-main input[type="text"],.re-kpi-main input:not([type]){max-width:280px}
+.re-kpi-sub2{display:flex;align-items:center;gap:8px}
+.re-kpi-sub2 .re-colors{margin-left:auto}
+.re-kpi-sub2 input.re-kpi-sub{max-width:50%}
+.re-kpi-main input,.re-kpi-sub2 input{background:transparent;border:1px solid var(--card-border);border-radius:6px;padding:5px 8px;color:var(--text);font-size:12.5px;outline:none;min-width:0}
+.re-kpi-main input:focus,.re-kpi-sub2 input:focus{border-color:var(--accent)}
+.re-kpi-main input[readonly]{color:var(--text-dim);border-style:dashed}
+.re-kpi-value{font-family:var(--mono)}
+.re-kpi-sub{flex:1}
+.re-kpi-card .re-drag{color:var(--text-faint);cursor:grab;display:flex;align-items:center;justify-content:center;user-select:none}
+.re-kpi-card .re-drag:active{cursor:grabbing}
+.re-kpi-manual{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-dim);white-space:nowrap;cursor:pointer}
+.re-kpi-manual input{accent-color:var(--accent);width:14px;height:14px}
+.re-kpi-stale{font-size:10.5px;color:var(--text-dim);border:1px solid var(--line);border-radius:8px;padding:1px 6px;white-space:nowrap}
+.re-kpi-stale.warn{color:var(--warn);border-color:rgba(251,191,36,0.4)}
 .re-kpi-del{flex-shrink:0;width:24px;height:24px;border:none;background:transparent;color:var(--text-dim);border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center}
 .re-kpi-del:hover{background:rgba(248,113,113,0.15);color:var(--err)}
 /* KPI 布局预览:repeat(min(n,8),1fr) 由 JS 内联注入;gap/最小宽度沿用 kpi 体系 */
@@ -281,62 +295,80 @@ html.theme-switching *{transition:none !important}
 .re-kpi-pv .t{font-size:11.5px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .re-kpi-pv .v{font-size:17px;font-weight:700;margin:2px 0;display:flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .re-kpi-pv .s{font-size:11px;color:var(--text-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 级别色点:与看板 kpi-danger/warning/success 同色(--r-* 对齐) */
 .re-lv-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.re-lv-dot.red{background:var(--err)}
-.re-lv-dot.orange{background:var(--warn)}
-.re-lv-dot.green{background:var(--ok)}
-.re-lv-dot.gray{background:var(--text-dim)}
+.re-lv-dot.red{background:var(--r-red)}
+.re-lv-dot.orange{background:var(--r-orange)}
+.re-lv-dot.green{background:var(--r-green)}
+.re-lv-dot.gray{background:var(--r-gray)}
 .re-lv-dot.none{background:transparent;border:1px solid var(--line)}
 
-/* 表格编辑区 */
+/* 表格编辑区(P0-1 列宽分档:table-layout:fixed + 列类型挂类) */
 .re-table-wrap{overflow-x:auto}
-.re-table{border-collapse:collapse;width:100%;font-size:12.5px}
-.re-table th{background:var(--inset-bg);border:1px solid var(--card-border);padding:0;text-align:left;font-weight:600;white-space:nowrap}
-.re-table th .th-in{display:flex;align-items:center;gap:4px;padding:7px 8px}
+.re-table{border-collapse:collapse;width:100%;font-size:12.5px;table-layout:fixed}
+.re-table th{background:var(--inset-bg);border:1px solid var(--card-border);padding:0;text-align:left;font-weight:600;white-space:nowrap;overflow:hidden}
+.re-table th .th-in{display:flex;align-items:center;gap:4px;padding:7px 8px;overflow:hidden}
+.re-table th.col-tools{width:92px}
+.re-table th.col-enum{width:88px}
+.re-table th.col-date{width:148px}
+.re-table th.col-num{width:112px}
+.re-table th.col-text{min-width:220px}
+.re-table th.col-add{width:44px}
 .re-table th.col-locked .th-in{color:var(--text-dim)}
-.re-table td{border:1px solid var(--card-border);padding:0;position:relative;min-width:90px}
+.re-table td{border:1px solid var(--card-border);padding:0;position:relative;min-width:0}
+.re-table td.col-num input{text-align:right;font-family:var(--mono)}
 .re-table td input,.re-table td select{width:100%;border:none;background:transparent;color:var(--text);font-size:12.5px;padding:7px 22px 7px 8px;outline:none;min-width:0}
+.re-table td select,.re-table td input[type="date"]{padding-right:38px}
 .re-table td input:focus,.re-table td select:focus{background:rgba(123,108,255,0.08)}
 .re-table tr.re-row-err td{background:rgba(248,113,113,0.1)}
 .re-table tr.re-row-err td:first-child{box-shadow:inset 3px 0 0 var(--err)}
-.re-table .cell-c-red input{color:var(--err)}
-.re-table .cell-c-orange input{color:var(--warn)}
-.re-table .cell-c-green input{color:var(--ok)}
-.re-table .cell-c-gray input{color:var(--text-dim)}
-.re-table tr.row-c-red td{background:rgba(248,113,113,0.07)}
-.re-table tr.row-c-orange td{background:rgba(251,191,36,0.07)}
-.re-table tr.row-c-green td{background:rgba(52,211,153,0.07)}
-.re-table tr.row-c-gray td{background:rgba(154,160,184,0.1)}
 .re-table .re-row-tools{display:flex;align-items:center;gap:2px;padding:3px 4px;white-space:nowrap;background:var(--inset-bg);border:1px solid var(--card-border)}
 .re-table .re-row-tools button{width:20px;height:20px;border:none;background:transparent;color:var(--text-dim);border-radius:5px;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;padding:0}
 .re-table .re-row-tools button:hover{background:var(--btn-hover);color:var(--text)}
 .re-table .re-row-tools .re-rm:hover{background:rgba(248,113,113,0.15);color:var(--err)}
+.re-table .re-drag{cursor:grab;font-size:12px}
+.re-table .re-drag:active{cursor:grabbing}
 .re-cell-expand{position:absolute;right:2px;top:50%;transform:translateY(-50%);width:18px;height:18px;border:none;background:transparent;color:var(--text-faint);border-radius:4px;cursor:pointer;font-size:10px;display:flex;align-items:center;justify-content:center;padding:0}
 .re-cell-expand:hover{background:var(--btn-hover);color:var(--text)}
-/* 语义色板(按钮式色块,不含 emoji):单元格级(吸附格内右上)与行级(行工具条内) */
+/* 语义色板(按钮式色块,不含 emoji):统一弹出层,面板 position:fixed 由 JS 定位(规避滚动容器裁剪) */
 .re-colors{position:relative;display:inline-flex}
-.re-colors>summary{list-style:none;cursor:pointer;width:16px;height:16px;border-radius:50%;border:1.5px solid var(--line);background:transparent;flex-shrink:0}
-.re-colors>summary::-webkit-details-marker{display:none}
-.re-colors>summary.s-red{background:var(--err);border-color:var(--err)}
-.re-colors>summary.s-orange{background:var(--warn);border-color:var(--warn)}
-.re-colors>summary.s-green{background:var(--ok);border-color:var(--ok)}
-.re-colors>summary.s-gray{background:var(--text-dim);border-color:var(--text-dim)}
-.re-colors[open]>summary{outline:1px solid var(--accent)}
-.re-palette{position:absolute;z-index:5;top:18px;left:0;display:flex;gap:4px;background:var(--modal-bg);border:1px solid var(--card-border);border-radius:8px;padding:5px;box-shadow:0 6px 18px rgba(0,0,0,0.35)}
+.re-colors>button{width:16px;height:16px;border-radius:50%;border:1.5px solid var(--line);background:transparent;flex-shrink:0;cursor:pointer;padding:0}
+.re-colors>button.s-red{background:var(--r-red);border-color:var(--r-red)}
+.re-colors>button.s-orange{background:var(--r-orange);border-color:var(--r-orange)}
+.re-colors>button.s-green{background:var(--r-green);border-color:var(--r-green)}
+.re-colors>button.s-gray{background:var(--r-gray);border-color:var(--r-gray)}
+/* P2:删除×默认 50% 透明红 tint(--err),hover 全亮 */
+.re-table .re-row-tools .re-rm,.re-kpi-del,.re-drawer-item .re-rm{color:var(--err);opacity:0.5}
+.re-table .re-row-tools .re-rm:hover,.re-kpi-del:hover,.re-drawer-item .re-rm:hover{opacity:1}
+.re-palette{display:flex;gap:4px;background:var(--modal-bg);border:1px solid var(--card-border);border-radius:8px;padding:4px;box-shadow:0 6px 18px rgba(0,0,0,0.35)}
 .re-palette button{width:16px;height:16px;border-radius:50%;border:1.5px solid var(--line);background:transparent;cursor:pointer;padding:0}
 .re-palette button:hover{outline:2px solid var(--accent)}
-.re-palette button.p-red{background:var(--err);border-color:var(--err)}
-.re-palette button.p-orange{background:var(--warn);border-color:var(--warn)}
-.re-palette button.p-green{background:var(--ok);border-color:var(--ok)}
-.re-palette button.p-gray{background:var(--text-dim);border-color:var(--text-dim)}
-.re-table .re-colors{position:absolute;right:20px;top:50%;transform:translateY(-50%)}
-/* 表头菜单(列操作:右插列/删列/改名;locked 置灰提示) */
+.re-palette button.p-red{background:var(--r-red);border-color:var(--r-red)}
+.re-palette button.p-orange{background:var(--r-orange);border-color:var(--r-orange)}
+.re-palette button.p-green{background:var(--r-green);border-color:var(--r-green)}
+.re-palette button.p-gray{background:var(--r-gray);border-color:var(--r-gray)}
+/* 注意:本元素是浮层面板的祖先,禁用 transform——transform 会成为 fixed 后代的包含块,
+   导致面板定位相对自身而非视口(实测面板渲染错位约 460px 的根因);居中改用负 margin */
+.re-table .re-colors{position:absolute;right:20px;top:50%;margin-top:-8px}
+/* 单元格级语义色(文本/下拉/日期统一染色,修复:涂色在枚举列看不见) */
+.re-table .cell-c-red input,.re-table .cell-c-red select{color:var(--r-red)}
+.re-table .cell-c-orange input,.re-table .cell-c-orange select{color:var(--r-orange)}
+.re-table .cell-c-green input,.re-table .cell-c-green select{color:var(--r-green)}
+.re-table .cell-c-gray input,.re-table .cell-c-gray select{color:var(--r-gray)}
+/* 行级语义色:淡色底整行,与看板 ROW_COLOR_BG 对应(--r-*-bg 对齐) */
+.re-table tr.row-c-red td{background:var(--r-red-bg)}
+.re-table tr.row-c-orange td{background:var(--r-orange-bg)}
+.re-table tr.row-c-green td{background:var(--r-green-bg)}
+.re-table tr.row-c-gray td{background:var(--r-gray-bg)}
+/* 拖拽过程视觉反馈 */
+.re-table tr.sortable-ghost td,.re-kpi-card.sortable-ghost{opacity:0.35}
+.re-table tr.sortable-chosen td{outline:1px dashed var(--accent)}
+.re-kpi-card.sortable-chosen{outline:1px dashed var(--accent)}
+/* 表头菜单(列操作:右插列/删列/改名;locked 置灰提示;统一弹出层管理) */
 .th-menu{position:relative;display:inline-flex}
-.th-menu>summary{list-style:none;cursor:pointer;width:18px;height:18px;border:none;background:transparent;color:var(--text-faint);border-radius:4px;display:flex;align-items:center;justify-content:center}
-.th-menu>summary::-webkit-details-marker{display:none}
-.th-menu>summary:hover{background:var(--btn-hover);color:var(--text)}
-.th-menu[open]>summary{color:var(--accent)}
-.th-menu-list{position:absolute;z-index:6;top:20px;right:0;display:flex;flex-direction:column;min-width:120px;background:var(--modal-bg);border:1px solid var(--card-border);border-radius:8px;padding:4px;box-shadow:0 6px 18px rgba(0,0,0,0.35)}
+.th-menu-btn{list-style:none;cursor:pointer;width:18px;height:18px;border:none;background:transparent;color:var(--text-faint);border-radius:4px;display:flex;align-items:center;justify-content:center;padding:0;font-size:12px}
+.th-menu-btn:hover{background:var(--btn-hover);color:var(--text)}
+.th-menu-list{display:flex;flex-direction:column;min-width:120px;background:var(--modal-bg);border:1px solid var(--card-border);border-radius:8px;padding:4px;box-shadow:0 6px 18px rgba(0,0,0,0.35)}
 .th-menu-list button{border:none;background:transparent;color:var(--text);font-size:12px;text-align:left;padding:6px 10px;border-radius:6px;cursor:pointer}
 .th-menu-list button:hover{background:var(--btn-hover)}
 .th-menu-list button:disabled{color:var(--text-faint);cursor:not-allowed}
