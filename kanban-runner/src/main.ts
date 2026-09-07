@@ -1094,6 +1094,9 @@ interface RiskCellRef {
 }
 
 const SEMANTIC_COLORS = ["red", "orange", "green", "gray", "none"] as const;
+/** 删除按钮统一用垃圾桶 SVG(与拖拽把手 ⠿ 形区分,P2 区分度修复);currentColor 继承红色 tint */
+const TRASH_SVG =
+  '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
 const RISK_DATE_COL = /日期|时间|截止|期限/;
 const RISK_NUM_COL = /金额|数量|合计|毛利/;
 const RISK_REQ_COL = /等级|状态|事项|行动|问题|描述/;
@@ -1123,6 +1126,12 @@ function fmtDateTime(secs: number): string {
   const d = new Date(secs * 1000);
   const p = (n: number) => String(n).padStart(2, "0");
   return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+/** 数值列千分位显示(裁决 E):仅纯数字串格式化(整数位每三位逗号),带 万/% 等后缀原样保留 */
+function fmtThousands(v: string): string {
+  const m = /^(-?)(\d+)(\.\d+)?$/.exec(v.trim());
+  if (!m) return v;
+  return m[1] + m[2].replace(/\B(?=(\d{3})+(?!\d))/g, ",") + (m[3] ?? "");
 }
 function riskSetStatus(kind: "err" | "ok" | "info", text: string) {
   const el = byId("re-status");
@@ -1184,14 +1193,15 @@ function placePopup(panel: HTMLElement, anchor: HTMLElement, alignRight: boolean
   panel.style.top = (belowOk ? r.bottom + 4 : Math.max(8, r.top - h - 4)) + "px";
 }
 
-/** 语义色板(统一弹出层:点色块外/Esc 自动关);面板懒构建,选色即写回数据模型并即时同步状态点 */
-function buildColorPalette(current: string, onPick: (c: string) => void): HTMLElement {
+/** 语义色板(统一弹出层:点色块外/Esc 自动关);面板懒构建,选色即写回数据模型并即时同步状态点;
+ *  label 传入时渲染为"色点+文字标签"显性入口(裁决 B:行级标色不再是裸点猜点击) */
+function buildColorPalette(current: string, onPick: (c: string) => void, label?: string): HTMLElement {
   const wrap = document.createElement("span");
-  wrap.className = "re-colors";
+  wrap.className = "re-colors" + (label ? " re-colors-row" : "");
   const dot = document.createElement("button");
   dot.type = "button";
   dot.className = "s-" + current;
-  dot.title = "语义标色";
+  dot.title = label ? "标色(整行底色)" : "语义标色";
   const pal = document.createElement("span");
   pal.className = "re-palette";
   pal.hidden = true;
@@ -1214,7 +1224,7 @@ function buildColorPalette(current: string, onPick: (c: string) => void): HTMLEl
       pal.appendChild(b);
     }
   };
-  dot.addEventListener("click", (e) => {
+  const open = (e: MouseEvent) => {
     e.stopPropagation();
     togglePopup(wrap, pal, () => {
       fill();
@@ -1224,8 +1234,16 @@ function buildColorPalette(current: string, onPick: (c: string) => void): HTMLEl
       pal.style.position = "fixed";
       placePopup(pal, dot, false);
     });
-  });
+  };
+  dot.addEventListener("click", open);
   wrap.appendChild(dot);
+  if (label) {
+    const tag = document.createElement("span");
+    tag.className = "re-colors-tag";
+    tag.textContent = label;
+    tag.addEventListener("click", open);
+    wrap.appendChild(tag);
+  }
   wrap.appendChild(pal);
   return wrap;
 }
@@ -1329,7 +1347,7 @@ function riskColClass(name: string): string {
   return "col-text";
 }
 
-/** 渲染一张动态列表格(风险表/行动表同构);行操作=拖拽+行级色+删除(拖拽替代上下移),单元格级色板+长文本抽屉 */
+/** 渲染一张动态列表格(风险表/行动表同构);行操作=拖拽+标色+删除(拖拽替代上下移),长文本抽屉按列挂载 */
 function renderRiskTable(container: HTMLElement, table: RiskTable, label: string) {
   destroyRiskSortables(); // 防多实例:每次渲染先销毁旧 Sortable(修复:行拖动动不了)
   container.innerHTML = "";
@@ -1338,6 +1356,29 @@ function renderRiskTable(container: HTMLElement, table: RiskTable, label: string
     const i = table.col_meta.length;
     table.col_meta.push({ name: table.columns[i], locked: false });
   }
+  // 表格工具栏(裁决 C:新增列入口固定在表格上方,不随横向滚动溢出)
+  const bar = document.createElement("div");
+  bar.className = "re-table-bar";
+  const addCol = document.createElement("button");
+  addCol.type = "button";
+  addCol.className = "mini-btn";
+  addCol.textContent = "＋ 新增列";
+  addCol.title = "在表格最右侧新增一列";
+  addCol.addEventListener("click", () => {
+    const newName = window.prompt("新列名", "新列");
+    if (newName === null) return;
+    const n = newName.trim() || "新列";
+    table.columns.push(n);
+    table.col_meta.push({ name: n, locked: false });
+    table.rows.forEach((r) => r.cells.push({ text: "", color: "none" }));
+    markRiskDirty();
+    renderRiskAll();
+  });
+  bar.appendChild(addCol);
+  container.appendChild(bar);
+  // 横向滚动容器与外层解耦:工具栏不参与滚动
+  const scroll = document.createElement("div");
+  scroll.className = "re-table-scroll";
   const tbl = document.createElement("table");
   tbl.className = "re-table";
   const thead = document.createElement("thead");
@@ -1360,28 +1401,6 @@ function renderRiskTable(container: HTMLElement, table: RiskTable, label: string
     th.appendChild(inn);
     hr.appendChild(th);
   });
-  const addTh = document.createElement("th");
-  addTh.className = "col-add";
-  const addInn = document.createElement("div");
-  addInn.className = "th-in";
-  const addBtn = document.createElement("button");
-  addBtn.type = "button";
-  addBtn.className = "mini-btn";
-  addBtn.textContent = "＋ 列";
-  addBtn.title = "在最右侧新增一列";
-  addBtn.addEventListener("click", () => {
-    const newName = window.prompt("新列名", "新列");
-    if (newName === null) return;
-    const n = newName.trim() || "新列";
-    table.columns.push(n);
-    table.col_meta.push({ name: n, locked: false });
-    table.rows.forEach((r) => r.cells.push({ text: "", color: "none" }));
-    markRiskDirty();
-    renderRiskAll();
-  });
-  addInn.appendChild(addBtn);
-  addTh.appendChild(addInn);
-  hr.appendChild(addTh);
   thead.appendChild(hr);
   tbl.appendChild(thead);
 
@@ -1406,24 +1425,28 @@ function renderRiskTable(container: HTMLElement, table: RiskTable, label: string
     drag.addEventListener("mousedown", (e) => e.stopPropagation());
     tools.appendChild(drag);
     tools.appendChild(
-      buildColorPalette(row.style?.row_color ?? "none", (c) => {
-        if (!row.style) row.style = { row_color: c };
-        else row.style.row_color = c;
-        // 即时反馈②:直接切当前 tr 的行底色类(移除旧 row-c-*→条件加新类),
-        // 不依赖整表重渲染——保证选色后 UI 立即变色
-        for (const cls of Array.from(tr.classList)) {
-          if (cls.startsWith("row-c-")) tr.classList.remove(cls);
-        }
-        if (c !== "none") tr.classList.add("row-c-" + c);
-        markRiskDirty();
-      })
+      buildColorPalette(
+        row.style?.row_color ?? "none",
+        (c) => {
+          if (!row.style) row.style = { row_color: c };
+          else row.style.row_color = c;
+          // 即时反馈②:直接切当前 tr 的行底色类(移除旧 row-c-*→条件加新类),
+          // 不依赖整表重渲染——保证选色后 UI 立即变色
+          for (const cls of Array.from(tr.classList)) {
+            if (cls.startsWith("row-c-")) tr.classList.remove(cls);
+          }
+          if (c !== "none") tr.classList.add("row-c-" + c);
+          markRiskDirty();
+        },
+        "标色 ▾"
+      )
     );
-    // P1-2:行工具条 92px 内收纳(拖拽把手+行级色+删除),↑↓ 移除——拖拽排序可替代
+    // P1-2:行工具条收纳(拖拽把手+标色+删除),↑↓ 移除——拖拽排序可替代
     const del = document.createElement("button");
     del.type = "button";
     del.className = "re-rm";
     del.title = "删除此行";
-    del.textContent = "×";
+    del.innerHTML = TRASH_SVG;
     del.addEventListener("click", () => {
       table.rows.splice(ri, 1);
       markRiskDirty();
@@ -1432,7 +1455,7 @@ function renderRiskTable(container: HTMLElement, table: RiskTable, label: string
     tools.appendChild(del);
     toolTd.appendChild(tools);
     tr.appendChild(toolTd);
-    // 数据单元格(枚举下拉 / 日期 / 文本+色板+抽屉)
+    // 数据单元格(枚举下拉 / 日期 / 文本[数值千分位]+长文本抽屉)
     table.columns.forEach((colName, ci) => {
       const cell = row.cells[ci] ?? { text: "", color: "none" };
       if (!row.cells[ci]) row.cells[ci] = cell;
@@ -1474,15 +1497,22 @@ function renderRiskTable(container: HTMLElement, table: RiskTable, label: string
       } else {
         const inp = document.createElement("input");
         inp.type = "text";
-        inp.value = cell.text;
-        inp.placeholder = RISK_NUM_COL.test(colName) ? "数值" : "";
+        const isNum = RISK_NUM_COL.test(colName);
+        // 裁决 E:数值列千分位显示;输入时存原始数字(去逗号),失焦重新格式化
+        inp.value = isNum ? fmtThousands(cell.text) : cell.text;
+        inp.placeholder = isNum ? "数值" : "";
         inp.addEventListener("input", () => {
-          cell.text = inp.value;
+          cell.text = isNum ? inp.value.replace(/,/g, "") : inp.value;
           markRiskDirty();
         });
+        if (isNum) {
+          inp.addEventListener("blur", () => {
+            inp.value = fmtThousands(inp.value.replace(/,/g, ""));
+          });
+        }
         td.appendChild(inp);
-        // P1-1:长文本宽幅抽屉入口仅在长文本列渲染(数值列不挂,避免三控件堆叠)
-        if (!RISK_NUM_COL.test(colName)) {
+        // P1-1:长文本宽幅抽屉入口仅在长文本列渲染(数值列不挂,避免控件堆叠)
+        if (!isNum) {
           const exp = document.createElement("button");
           exp.type = "button";
           exp.className = "re-cell-expand";
@@ -1492,17 +1522,8 @@ function renderRiskTable(container: HTMLElement, table: RiskTable, label: string
           td.appendChild(exp);
         }
       }
-      td.appendChild(
-        buildColorPalette(cell.color ?? "none", (c) => {
-          cell.color = c;
-          // 即时反馈②(格级同款断链一并修):直接切当前 td 的格级色类
-          for (const cls of Array.from(td.classList)) {
-            if (cls.startsWith("cell-c-")) td.classList.remove(cls);
-          }
-          if (c !== "none") td.classList.add("cell-c-" + c);
-          markRiskDirty();
-        })
-      );
+      // 裁决 A:格级涂色入口移除(密度灾难根源);cell.color 数据结构与 cell-c-* 渲染保留,
+      // 历史 md 里的格级色照旧显色,仅不再提供逐格涂色 UI(行级标色覆盖小白场景)
       tr.appendChild(td);
     });
     // 补齐列数(防畸形数据)
@@ -1512,7 +1533,8 @@ function renderRiskTable(container: HTMLElement, table: RiskTable, label: string
     tbody.appendChild(tr);
   });
   tbl.appendChild(tbody);
-  container.appendChild(tbl);
+  scroll.appendChild(tbl);
+  container.appendChild(scroll);
   // 行尾追加行按钮
   const addRow = document.createElement("button");
   addRow.type = "button";
@@ -1594,7 +1616,7 @@ function renderKpiSection() {
     del.type = "button";
     del.className = "re-kpi-del";
     del.title = "删除此卡";
-    del.textContent = "×";
+    del.innerHTML = TRASH_SVG;
     del.addEventListener("click", () => {
       cards.splice(i, 1);
       markRiskDirty();
@@ -1827,7 +1849,7 @@ function addDrawerItem(text: string) {
   rm.type = "button";
   rm.className = "re-rm";
   rm.title = "删除此条";
-  rm.textContent = "×";
+  rm.innerHTML = TRASH_SVG;
   rm.addEventListener("click", () => {
     list.removeChild(item);
   });

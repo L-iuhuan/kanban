@@ -268,19 +268,18 @@ html.theme-switching *{transition:none !important}
 .re-sec-title.re-sub{margin-top:14px;color:var(--text-dim);font-weight:400;font-size:11.5px}
 .re-raw{font-family:var(--mono);font-size:11.5px;color:var(--text-dim);white-space:pre-wrap;word-break:break-all;max-height:96px;overflow-y:auto;margin:0;user-select:text}
 
-/* KPI 卡片编辑:双行结构(P0-2 比例规范) */
+/* KPI 卡片编辑:双行结构(裁决 D 紧凑化:主行标题 2fr+数值 132px 同行,副行对齐标题左缘) */
 .re-kpi-list{display:flex;flex-direction:column;gap:8px}
-.re-kpi-card{display:flex;flex-direction:column;gap:8px;background:var(--inset-bg);border:1px solid var(--card-border);border-radius:10px;padding:8px 10px}
-.re-kpi-main{display:grid;grid-template-columns:22px minmax(0,2fr) minmax(120px,140px) 28px;gap:8px;align-items:center}
-.re-kpi-main input[type="text"],.re-kpi-main input:not([type]){max-width:280px}
-.re-kpi-sub2{display:flex;align-items:center;gap:8px}
+.re-kpi-card{display:flex;flex-direction:column;gap:6px;background:var(--inset-bg);border:1px solid var(--card-border);border-radius:10px;padding:8px 10px}
+.re-kpi-main{display:grid;grid-template-columns:20px minmax(0,2fr) 132px 24px;gap:8px;align-items:center}
+.re-kpi-main input{width:100%}
+.re-kpi-sub2{display:flex;align-items:center;gap:8px;padding-left:28px}
 .re-kpi-sub2 .re-colors{margin-left:auto}
-.re-kpi-sub2 input.re-kpi-sub{max-width:50%}
 .re-kpi-main input,.re-kpi-sub2 input{background:transparent;border:1px solid var(--card-border);border-radius:6px;padding:5px 8px;color:var(--text);font-size:12.5px;outline:none;min-width:0}
 .re-kpi-main input:focus,.re-kpi-sub2 input:focus{border-color:var(--accent)}
 .re-kpi-main input[readonly]{color:var(--text-dim);border-style:dashed}
 .re-kpi-value{font-family:var(--mono)}
-.re-kpi-sub{flex:1}
+.re-kpi-sub{flex:1 1 0;max-width:480px}
 .re-kpi-card .re-drag{color:var(--text-faint);cursor:grab;display:flex;align-items:center;justify-content:center;user-select:none}
 .re-kpi-card .re-drag:active{cursor:grabbing}
 .re-kpi-manual{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-dim);white-space:nowrap;cursor:pointer}
@@ -303,32 +302,37 @@ html.theme-switching *{transition:none !important}
 .re-lv-dot.gray{background:var(--r-gray)}
 .re-lv-dot.none{background:transparent;border:1px solid var(--line)}
 
-/* 表格编辑区(P0-1 列宽分档:table-layout:fixed + 列类型挂类) */
-.re-table-wrap{overflow-x:auto}
+/* 表格编辑区(P0-1 列宽分档:table-layout:fixed + 列类型挂类;裁决 C:工具栏与滚动区分层) */
+.re-table-wrap{display:flex;flex-direction:column;gap:8px}
+.re-table-bar{display:flex;justify-content:flex-end}
+.re-table-scroll{overflow-x:auto}
 .re-table{border-collapse:collapse;width:100%;font-size:12.5px;table-layout:fixed}
 .re-table th{background:var(--inset-bg);border:1px solid var(--card-border);padding:0;text-align:left;font-weight:600;white-space:nowrap;overflow:hidden}
 .re-table th .th-in{display:flex;align-items:center;gap:4px;padding:7px 8px;overflow:hidden}
-.re-table th.col-tools{width:92px}
+.re-table th.col-tools{width:116px}
 .re-table th.col-enum{width:88px}
 .re-table th.col-date{width:148px}
 .re-table th.col-num{width:112px}
 .re-table th.col-text{min-width:220px}
-.re-table th.col-add{width:44px}
 .re-table th.col-locked .th-in{color:var(--text-dim)}
 .re-table td{border:1px solid var(--card-border);padding:0;position:relative;min-width:0}
 .re-table td.col-num input{text-align:right;font-family:var(--mono)}
-.re-table td input,.re-table td select{width:100%;border:none;background:transparent;color:var(--text);font-size:12.5px;padding:7px 22px 7px 8px;outline:none;min-width:0}
-.re-table td select,.re-table td input[type="date"]{padding-right:38px}
+/* 裁决 F 控件避让统一:单元格输入 padding-right 单一规范——默认 8px;文本列为抽屉钮留 26px;
+   下拉为原生箭头留 24px;日期为原生选择器留 6px */
+.re-table td input,.re-table td select{width:100%;border:none;background:transparent;color:var(--text);font-size:12.5px;padding:7px 8px;outline:none;min-width:0}
+.re-table td.col-text input{padding-right:26px}
+.re-table td select{padding-right:24px}
+.re-table td input[type="date"]{padding-right:6px}
 .re-table td input:focus,.re-table td select:focus{background:rgba(123,108,255,0.08)}
 .re-table tr.re-row-err td{background:rgba(248,113,113,0.1)}
 .re-table tr.re-row-err td:first-child{box-shadow:inset 3px 0 0 var(--err)}
-.re-table .re-row-tools{display:flex;align-items:center;gap:2px;padding:3px 4px;white-space:nowrap;background:var(--inset-bg);border:1px solid var(--card-border)}
-.re-table .re-row-tools button{width:20px;height:20px;border:none;background:transparent;color:var(--text-dim);border-radius:5px;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;padding:0}
+.re-table .re-row-tools{display:flex;align-items:center;gap:6px;padding:3px 4px;white-space:nowrap;background:var(--inset-bg);border:1px solid var(--card-border)}
+.re-table .re-row-tools button{width:22px;height:22px;border:none;background:transparent;color:var(--text-dim);border-radius:5px;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;padding:0}
 .re-table .re-row-tools button:hover{background:var(--btn-hover);color:var(--text)}
 .re-table .re-row-tools .re-rm:hover{background:rgba(248,113,113,0.15);color:var(--err)}
 .re-table .re-drag{cursor:grab;font-size:12px}
 .re-table .re-drag:active{cursor:grabbing}
-.re-cell-expand{position:absolute;right:2px;top:50%;transform:translateY(-50%);width:18px;height:18px;border:none;background:transparent;color:var(--text-faint);border-radius:4px;cursor:pointer;font-size:10px;display:flex;align-items:center;justify-content:center;padding:0}
+.re-cell-expand{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:18px;height:18px;border:none;background:transparent;color:var(--text-faint);border-radius:4px;cursor:pointer;font-size:10px;display:flex;align-items:center;justify-content:center;padding:0}
 .re-cell-expand:hover{background:var(--btn-hover);color:var(--text)}
 /* 语义色板(按钮式色块,不含 emoji):统一弹出层,面板 position:fixed 由 JS 定位(规避滚动容器裁剪) */
 .re-colors{position:relative;display:inline-flex}
@@ -347,9 +351,10 @@ html.theme-switching *{transition:none !important}
 .re-palette button.p-orange{background:var(--r-orange);border-color:var(--r-orange)}
 .re-palette button.p-green{background:var(--r-green);border-color:var(--r-green)}
 .re-palette button.p-gray{background:var(--r-gray);border-color:var(--r-gray)}
-/* 注意:本元素是浮层面板的祖先,禁用 transform——transform 会成为 fixed 后代的包含块,
-   导致面板定位相对自身而非视口(实测面板渲染错位约 460px 的根因);居中改用负 margin */
-.re-table .re-colors{position:absolute;right:20px;top:50%;margin-top:-8px}
+/* 裁决 A/B:格级涂色入口已移除(单元格内不再绝对定位色点);行级标色为"色点+文字标签"显性入口,流内布局 */
+.re-colors-row{display:inline-flex;align-items:center;gap:4px}
+.re-colors-tag{font-size:11px;color:var(--text-dim);cursor:pointer;user-select:none;white-space:nowrap}
+.re-colors-tag:hover{color:var(--text)}
 /* 单元格级语义色(文本/下拉/日期统一染色,修复:涂色在枚举列看不见) */
 .re-table .cell-c-red input,.re-table .cell-c-red select{color:var(--r-red)}
 .re-table .cell-c-orange input,.re-table .cell-c-orange select{color:var(--r-orange)}
@@ -373,8 +378,6 @@ html.theme-switching *{transition:none !important}
 .th-menu-list button:hover{background:var(--btn-hover)}
 .th-menu-list button:disabled{color:var(--text-faint);cursor:not-allowed}
 .th-menu-list button:disabled:hover{background:transparent}
-.re-col-add-row{padding:6px 8px}
-.re-col-add-row button{width:100%}
 
 /* 备注 / 源码 */
 .re-notes{width:100%;background:var(--inset-bg);border:1px solid var(--card-border);border-radius:8px;padding:8px 10px;color:var(--text);font-size:12.5px;outline:none;resize:vertical;font-family:inherit}
