@@ -3,6 +3,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import Sortable from "sortablejs";
 
 // ── 类型 ──────────────────────────────────────────────
 interface AppConfig {
@@ -784,6 +785,10 @@ byId("btn-save-config").addEventListener("click", async () => {
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !settingsModal.hidden) settingsModal.hidden = true;
   if (e.key === "Escape" && !sharePicker.hidden) sharePicker.hidden = true;
+  // 抽屉优先于编辑器关闭;编辑器走未保存拦截
+  const drawerMask = byId("re-drawer-mask");
+  if (e.key === "Escape" && !drawerMask.hidden) closeDrawer();
+  else if (e.key === "Escape" && !byId("risk-modal").hidden) tryCloseRiskEditor();
 });
 byId("share-path-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
@@ -1026,6 +1031,914 @@ listen<boolean>("setup-done", (e) => {
     byIdText("setup-progress-name", "环境准备失败,请查看日志");
     byId<HTMLElement>("setup-progress-fill").classList.add("failed");
   }
+});
+
+// ── 风险文档编辑(0.3.26,R 面编辑功能;JSON 契约见 §9.5) ──
+interface RiskKpiCard {
+  title: string;
+  value: string;
+  sub: string;
+  /** red|orange|green|gray|none */
+  level: string;
+  source: "derived" | "override" | "custom";
+  derived_value: string;
+  stale: boolean;
+}
+interface RiskCell {
+  text: string;
+  color: string;
+}
+interface RiskRow {
+  cells: RiskCell[];
+  style: { row_color: string };
+}
+interface RiskColMeta {
+  name: string;
+  locked: boolean;
+}
+interface RiskTable {
+  columns: string[];
+  col_meta: RiskColMeta[];
+  rows: RiskRow[];
+}
+/** §9.5 JSON 协议契约(字段名与 Python 单一真源逐字一致) */
+interface RiskDoc {
+  month: string;
+  mtime: number;
+  header_raw: string;
+  kpi_cards: RiskKpiCard[];
+  risk_table: RiskTable;
+  action_table: RiskTable;
+  notes_section: string;
+  caliber_raw: string;
+  derived_snapshot: Record<string, number>;
+  legend: Record<string, string>;
+}
+interface RiskMonthInfo {
+  month: string;
+  modified: string;
+}
+interface RiskMonths {
+  months: RiskMonthInfo[];
+  current: string;
+}
+interface RiskWriteResult {
+  render_ok: boolean;
+  log_tail: string;
+}
+interface RiskCellRef {
+  table: RiskTable;
+  row: number;
+  col: number;
+}
+
+const SEMANTIC_COLORS = ["red", "orange", "green", "gray", "none"] as const;
+const RISK_DATE_COL = /日期|时间|截止|期限/;
+const RISK_NUM_COL = /金额|数量|合计|毛利/;
+const RISK_REQ_COL = /等级|状态|事项|行动|问题|描述/;
+const RISK_DATE_VALUE = /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/;
+const RISK_NUM_VALUE = /^-?[\d,]+(\.\d+)?%?(万)?$/;
+
+let riskDoc: RiskDoc | null = null;
+let riskMonths: RiskMonthInfo[] = [];
+let riskCurrentMonth = "";
+let riskDirty = false;
+let riskSaving = false;
+let riskSourceEditable = false;
+let riskSortables: Sortable[] = [];
+let drawerCtx: RiskCellRef | null = null;
+
+/** 列枚举(下拉)判定:等级=高中低 / 状态=待处理·跟进中·已关闭 */
+function riskColEnum(name: string): string[] | null {
+  if (name.includes("等级")) return ["高", "中", "低"];
+  if (name.includes("状态")) return ["待处理", "跟进中", "已关闭"];
+  return null;
+}
+function colLocked(table: RiskTable, idx: number): boolean {
+  return table.col_meta[idx]?.locked === true;
+}
+function fmtDateTime(secs: number): string {
+  if (!secs || secs <= 0) return "—";
+  const d = new Date(secs * 1000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+function riskSetStatus(kind: "err" | "ok" | "info", text: string) {
+  const el = byId("re-status");
+  el.className = "re-status " + kind;
+  el.textContent = text;
+  el.hidden = false;
+}
+function riskHideStatus() {
+  byId("re-status").hidden = true;
+}
+function riskFootStatus(text: string) {
+  byId("re-foot-status").textContent = text;
+}
+function markRiskDirty() {
+  riskDirty = true;
+  byId("re-btn-open-dash").hidden = true;
+}
+function destroyRiskSortables() {
+  riskSortables.forEach((s) => s.destroy());
+  riskSortables = [];
+}
+
+/** 语义色板(details 下拉,按钮式色块不含 emoji);onPick 选中后自动收起 */
+function buildColorPalette(current: string, onPick: (c: string) => void): HTMLDetailsElement {
+  const det = document.createElement("details");
+  det.className = "re-colors";
+  const sum = document.createElement("summary");
+  sum.className = "s-" + current;
+  sum.title = "语义标色";
+  det.appendChild(sum);
+  const pal = document.createElement("div");
+  pal.className = "re-palette";
+  for (const c of SEMANTIC_COLORS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "p-" + c;
+    b.title = c === "none" ? "清除颜色" : (riskDoc?.legend?.[c] ?? c);
+    b.addEventListener("click", () => {
+      det.open = false;
+      onPick(c);
+    });
+    pal.appendChild(b);
+  }
+  det.appendChild(pal);
+  return det;
+}
+
+/** 表格列头菜单:右插列/删列/改名;核心列(locked)置灰并提示 */
+function buildColMenu(table: RiskTable, colIdx: number): HTMLDetailsElement {
+  const det = document.createElement("details");
+  det.className = "th-menu";
+  const sum = document.createElement("summary");
+  sum.title = "列操作";
+  sum.textContent = "⋮";
+  det.appendChild(sum);
+  const list = document.createElement("div");
+  list.className = "th-menu-list";
+  const locked = colLocked(table, colIdx);
+  const name = table.columns[colIdx] ?? "";
+  const mkBtn = (label: string, disabled: boolean, tip: string, fn: () => void) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.disabled = disabled;
+    b.title = tip;
+    b.addEventListener("click", () => {
+      det.open = false;
+      fn();
+    });
+    return b;
+  };
+  list.appendChild(
+    mkBtn("右侧插入列", false, "在此列右侧新增一列", () => {
+      const newName = window.prompt("新列名", "新列");
+      if (newName === null) return;
+      const n = newName.trim() || "新列";
+      table.columns.splice(colIdx + 1, 0, n);
+      table.col_meta.splice(colIdx + 1, 0, { name: n, locked: false });
+      table.rows.forEach((r) => r.cells.splice(colIdx + 1, 0, { text: "", color: "none" }));
+      markRiskDirty();
+      renderRiskAll();
+    })
+  );
+  list.appendChild(
+    mkBtn(
+      "删除此列",
+      locked,
+      locked ? "核心列,禁止删除(P0-5 保护)" : "删除「" + name + "」列",
+      () => {
+        if (locked) return;
+        if (!window.confirm("确定删除列「" + name + "」?该列所有内容将一并移除。")) return;
+        table.columns.splice(colIdx, 1);
+        table.col_meta.splice(colIdx, 1);
+        table.rows.forEach((r) => r.cells.splice(colIdx, 1));
+        markRiskDirty();
+        renderRiskAll();
+      }
+    )
+  );
+  list.appendChild(
+    mkBtn(
+      "重命名",
+      locked,
+      locked ? "核心列,禁止改名(P0-5 保护)" : "修改列名",
+      () => {
+        if (locked) return;
+        const nn = window.prompt("新的列名", name);
+        if (nn === null) return;
+        const n = nn.trim();
+        if (!n || n === name) return;
+        table.columns[colIdx] = n;
+        if (table.col_meta[colIdx]) table.col_meta[colIdx].name = n;
+        else table.col_meta[colIdx] = { name: n, locked: false };
+        markRiskDirty();
+        renderRiskAll();
+      }
+    )
+  );
+  det.appendChild(list);
+  return det;
+}
+
+/** 渲染一张动态列表格(风险表/行动表同构);行操作=拖拽+上下移+行级色+删除,单元格级色板+长文本抽屉 */
+function renderRiskTable(container: HTMLElement, table: RiskTable, label: string) {
+  container.innerHTML = "";
+  // 结构自检:col_meta 与 columns 对齐(旧文件缺元数据时兜底)
+  while (table.col_meta.length < table.columns.length) {
+    const i = table.col_meta.length;
+    table.col_meta.push({ name: table.columns[i], locked: false });
+  }
+  const tbl = document.createElement("table");
+  tbl.className = "re-table";
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+  const toolsTh = document.createElement("th");
+  toolsTh.innerHTML = '<div class="th-in" style="color:var(--text-faint)">操作</div>';
+  hr.appendChild(toolsTh);
+  table.columns.forEach((colName, ci) => {
+    const th = document.createElement("th");
+    if (colLocked(table, ci)) th.classList.add("col-locked");
+    const inn = document.createElement("div");
+    inn.className = "th-in";
+    const nm = document.createElement("span");
+    nm.textContent = colName + (colLocked(table, ci) ? " 🔒" : "");
+    if (colLocked(table, ci)) nm.title = "核心列:禁止删除/改名(等级、状态列受保护)";
+    inn.appendChild(nm);
+    inn.appendChild(buildColMenu(table, ci));
+    th.appendChild(inn);
+    hr.appendChild(th);
+  });
+  const addTh = document.createElement("th");
+  const addInn = document.createElement("div");
+  addInn.className = "th-in";
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "mini-btn";
+  addBtn.textContent = "＋ 列";
+  addBtn.title = "在最右侧新增一列";
+  addBtn.addEventListener("click", () => {
+    const newName = window.prompt("新列名", "新列");
+    if (newName === null) return;
+    const n = newName.trim() || "新列";
+    table.columns.push(n);
+    table.col_meta.push({ name: n, locked: false });
+    table.rows.forEach((r) => r.cells.push({ text: "", color: "none" }));
+    markRiskDirty();
+    renderRiskAll();
+  });
+  addInn.appendChild(addBtn);
+  addTh.appendChild(addInn);
+  hr.appendChild(addTh);
+  thead.appendChild(hr);
+  tbl.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  table.rows.forEach((row, ri) => {
+    const tr = document.createElement("tr");
+    tr.setAttribute("data-ri", String(ri));
+    if (row.style?.row_color && row.style.row_color !== "none") {
+      tr.classList.add("row-c-" + row.style.row_color);
+    }
+    // 行工具条:拖拽手柄 + 行级色 + 上移/下移 + 删除
+    const toolTd = document.createElement("td");
+    const tools = document.createElement("div");
+    tools.className = "re-row-tools";
+    const drag = document.createElement("button");
+    drag.type = "button";
+    drag.className = "re-drag";
+    drag.title = "拖拽排序";
+    drag.textContent = "≡";
+    tools.appendChild(drag);
+    tools.appendChild(
+      buildColorPalette(row.style?.row_color ?? "none", (c) => {
+        if (!row.style) row.style = { row_color: c };
+        else row.style.row_color = c;
+        markRiskDirty();
+        renderRiskAll();
+      })
+    );
+    const mkMove = (delta: number, glyph: string, tip: string) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.title = tip;
+      b.textContent = glyph;
+      b.addEventListener("click", () => {
+        const ni = ri + delta;
+        if (ni < 0 || ni >= table.rows.length) return;
+        const [moved] = table.rows.splice(ri, 1);
+        table.rows.splice(ni, 0, moved);
+        markRiskDirty();
+        renderRiskAll();
+      });
+      return b;
+    };
+    tools.appendChild(mkMove(-1, "↑", "上移"));
+    tools.appendChild(mkMove(1, "↓", "下移"));
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "re-rm";
+    del.title = "删除此行";
+    del.textContent = "×";
+    del.addEventListener("click", () => {
+      table.rows.splice(ri, 1);
+      markRiskDirty();
+      renderRiskAll();
+    });
+    tools.appendChild(del);
+    toolTd.appendChild(tools);
+    tr.appendChild(toolTd);
+    // 数据单元格(枚举下拉 / 日期 / 文本+色板+抽屉)
+    table.columns.forEach((colName, ci) => {
+      const cell = row.cells[ci] ?? { text: "", color: "none" };
+      if (!row.cells[ci]) row.cells[ci] = cell;
+      const td = document.createElement("td");
+      if (cell.color && cell.color !== "none") td.classList.add("cell-c-" + cell.color);
+      const enumOpts = riskColEnum(colName);
+      if (enumOpts) {
+        const sel = document.createElement("select");
+        enumOpts.forEach((opt) => {
+          const o = document.createElement("option");
+          o.value = opt;
+          o.textContent = opt;
+          sel.appendChild(o);
+        });
+        if (cell.text && !enumOpts.includes(cell.text)) {
+          const o = document.createElement("option");
+          o.value = cell.text;
+          o.textContent = cell.text + "(原值)";
+          sel.appendChild(o);
+        }
+        sel.value = cell.text;
+        sel.addEventListener("change", () => {
+          cell.text = sel.value;
+          markRiskDirty();
+        });
+        td.appendChild(sel);
+      } else if (RISK_DATE_COL.test(colName)) {
+        const inp = document.createElement("input");
+        inp.type = "date";
+        const m = RISK_DATE_VALUE.exec(cell.text);
+        inp.value = m ? m[0].replace(/\//g, "-") : "";
+        inp.title = "日期格式 YYYY-MM-DD";
+        inp.addEventListener("input", () => {
+          cell.text = inp.value;
+          markRiskDirty();
+        });
+        td.appendChild(inp);
+      } else {
+        const inp = document.createElement("input");
+        inp.type = "text";
+        inp.value = cell.text;
+        inp.placeholder = RISK_NUM_COL.test(colName) ? "数值" : "";
+        inp.addEventListener("input", () => {
+          cell.text = inp.value;
+          markRiskDirty();
+        });
+        td.appendChild(inp);
+        // 长文本宽幅抽屉入口(多条建议按全角｜拆行逐条编辑)
+        const exp = document.createElement("button");
+        exp.type = "button";
+        exp.className = "re-cell-expand";
+        exp.title = "宽幅编辑(多条内容按 ｜ 拆行)";
+        exp.textContent = "⤢";
+        exp.addEventListener("click", () => openDrawer(table, ri, ci, label));
+        td.appendChild(exp);
+      }
+      td.appendChild(
+        buildColorPalette(cell.color ?? "none", (c) => {
+          cell.color = c;
+          markRiskDirty();
+          renderRiskAll();
+        })
+      );
+      tr.appendChild(td);
+    });
+    // 补齐列数(防畸形数据)
+    for (let ci = row.cells.length; ci < table.columns.length; ci++) {
+      row.cells.push({ text: "", color: "none" });
+    }
+    tbody.appendChild(tr);
+  });
+  tbl.appendChild(tbody);
+  container.appendChild(tbl);
+  // 行尾追加行按钮
+  const addRow = document.createElement("button");
+  addRow.type = "button";
+  addRow.className = "mini-btn";
+  addRow.style.marginTop = "8px";
+  addRow.textContent = "＋ 新增一行";
+  addRow.addEventListener("click", () => {
+    table.rows.push({
+      cells: table.columns.map(() => ({ text: "", color: "none" })),
+      style: { row_color: "none" },
+    });
+    markRiskDirty();
+    renderRiskAll();
+  });
+  container.appendChild(addRow);
+  // 行拖拽排序(SortableJS,P0-8;结束按 DOM 顺序回写 rows)
+  riskSortables.push(
+    new Sortable(tbody, {
+      handle: ".re-drag",
+      animation: 150,
+      onEnd: () => {
+        const order = Array.from(tbody.querySelectorAll("tr[data-ri]")).map((tr) =>
+          Number((tr as HTMLTableRowElement).getAttribute("data-ri"))
+        );
+        table.rows = order.map((i) => table.rows[i]);
+        markRiskDirty();
+        renderRiskAll();
+      },
+    })
+  );
+}
+
+/** KPI 卡区渲染:卡片列表编辑(覆盖开关/来源/自定义卡增删/拖拽排序) + 8 列 grid 预览 */
+function renderKpiSection() {
+  const list = byId("re-kpi-list");
+  const preview = byId("re-kpi-preview");
+  list.innerHTML = "";
+  preview.innerHTML = "";
+  const cards = riskDoc?.kpi_cards ?? [];
+  const SRC_LABEL: Record<string, string> = { derived: "派生", override: "派生覆盖", custom: "自定义" };
+  cards.forEach((card, i) => {
+    const row = document.createElement("div");
+    row.className = "re-kpi-card";
+    row.setAttribute("data-ki", String(i));
+    const drag = document.createElement("span");
+    drag.className = "re-drag";
+    drag.title = "拖拽排序";
+    drag.textContent = "≡";
+    row.appendChild(drag);
+    const title = document.createElement("input");
+    title.value = card.title;
+    title.placeholder = "标题";
+    title.addEventListener("input", () => {
+      card.title = title.value;
+      markRiskDirty();
+      renderKpiPreview();
+    });
+    row.appendChild(title);
+    const value = document.createElement("input");
+    value.value = card.value;
+    value.title = card.source === "derived" ? "派生卡数值自动跟随表格计算(只读)" : "人工填写的数值";
+    value.addEventListener("input", () => {
+      card.value = value.value;
+      markRiskDirty();
+      renderKpiPreview();
+    });
+    row.appendChild(value);
+    const sub = document.createElement("input");
+    sub.value = card.sub;
+    sub.placeholder = "副文本";
+    sub.addEventListener("input", () => {
+      card.sub = sub.value;
+      markRiskDirty();
+      renderKpiPreview();
+    });
+    row.appendChild(sub);
+    row.appendChild(
+      buildColorPalette(card.level ?? "none", (c) => {
+        card.level = c;
+        markRiskDirty();
+        renderKpiPreview();
+      })
+    );
+    const src = document.createElement("select");
+    (["derived", "override", "custom"] as const).forEach((s) => {
+      const o = document.createElement("option");
+      o.value = s;
+      o.textContent = SRC_LABEL[s];
+      src.appendChild(o);
+    });
+    src.value = card.source;
+    src.title = "派生=自动跟随表格;派生覆盖=人工定值;自定义=全字段人工";
+    src.addEventListener("change", () => {
+      card.source = src.value as RiskKpiCard["source"];
+      if (card.source === "derived") card.value = card.derived_value ?? card.value;
+      markRiskDirty();
+      renderKpiSection();
+    });
+    row.appendChild(src);
+    const tail = document.createElement("span");
+    tail.className = "re-kpi-src";
+    if (card.source === "derived") {
+      value.readOnly = true;
+      tail.textContent = "派生值 " + (card.derived_value ?? "");
+    } else if (card.source === "override") {
+      value.readOnly = false;
+      value.placeholder = "覆盖派生值 " + (card.derived_value ?? "");
+      tail.textContent = "派生值 " + (card.derived_value ?? "");
+    } else {
+      value.readOnly = false;
+      tail.textContent = SRC_LABEL[card.source] ?? card.source;
+    }
+    row.appendChild(tail);
+    if (card.stale) {
+      const stale = document.createElement("span");
+      stale.className = "re-kpi-stale";
+      stale.title = "人工值与当前表格计算结果不一致,不随表更新";
+      stale.textContent = "人工值·不随表更新";
+      row.appendChild(stale);
+    }
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "re-kpi-del";
+    del.title = "删除此卡";
+    del.textContent = "×";
+    del.addEventListener("click", () => {
+      cards.splice(i, 1);
+      markRiskDirty();
+      renderKpiSection();
+    });
+    row.appendChild(del);
+    list.appendChild(row);
+  });
+  // 布局预览:n=0 隐藏整条;否则 repeat(min(n,8),1fr) 同渲染端
+  if (cards.length === 0) {
+    preview.style.display = "none";
+    return;
+  }
+  preview.style.display = "";
+  preview.style.gridTemplateColumns = "repeat(" + Math.min(cards.length, 8) + ",minmax(0,1fr))";
+  renderKpiPreview();
+  riskSortables.push(
+    new Sortable(list, {
+      handle: ".re-drag",
+      animation: 150,
+      onEnd: () => {
+        const order = Array.from(list.querySelectorAll(".re-kpi-card[data-ki]")).map((el) =>
+          Number((el as HTMLElement).getAttribute("data-ki"))
+        );
+        riskDoc!.kpi_cards = order.map((i) => riskDoc!.kpi_cards[i]);
+        markRiskDirty();
+        renderKpiSection();
+      },
+    })
+  );
+}
+
+function renderKpiPreview() {
+  const preview = byId("re-kpi-preview");
+  preview.innerHTML = "";
+  const cards = riskDoc?.kpi_cards ?? [];
+  if (cards.length === 0) {
+    preview.style.display = "none";
+    return;
+  }
+  preview.style.display = "";
+  preview.style.gridTemplateColumns = "repeat(" + Math.min(cards.length, 8) + ",minmax(0,1fr))";
+  const SRC_LABEL: Record<string, string> = { derived: "派生", override: "覆盖", custom: "自定义" };
+  cards.forEach((card) => {
+    const pv = document.createElement("div");
+    pv.className = "re-kpi-pv";
+    const t = document.createElement("div");
+    t.className = "t";
+    t.textContent = card.title;
+    const v = document.createElement("div");
+    v.className = "v";
+    const dot = document.createElement("span");
+    dot.className = "re-lv-dot " + (card.level ?? "none");
+    v.appendChild(dot);
+    v.appendChild(document.createTextNode(card.source === "derived" ? card.derived_value ?? card.value : card.value));
+    const s = document.createElement("div");
+    s.className = "s";
+    s.textContent = card.sub + (card.source !== "derived" ? " · " + (SRC_LABEL[card.source] ?? "") : "") + (card.stale ? " · 人工值不随表更新" : "");
+    pv.appendChild(t);
+    pv.appendChild(v);
+    pv.appendChild(s);
+    preview.appendChild(pv);
+  });
+}
+
+function renderRiskAll() {
+  if (!riskDoc) return;
+  destroyRiskSortables();
+  byId("re-header").textContent = riskDoc.header_raw ?? "";
+  byId("re-caliber").textContent = riskDoc.caliber_raw ?? "";
+  const notes = byId<HTMLTextAreaElement>("re-notes");
+  notes.value = riskDoc.notes_section ?? "";
+  renderKpiSection();
+  renderRiskTable(byId("re-risk-table"), riskDoc.risk_table, "风险表");
+  renderRiskTable(byId("re-action-table"), riskDoc.action_table, "行动表");
+  byId("re-meta").textContent =
+    "文件修改:" +
+    fmtDateTime(riskDoc.mtime) +
+    " · KPI " +
+    riskDoc.kpi_cards.length +
+    " 张 · 风险 " +
+    riskDoc.risk_table.rows.length +
+    " 行 · 行动 " +
+    riskDoc.action_table.rows.length +
+    " 行";
+}
+
+function renderMonthSelect(current: string) {
+  const sel = byId<HTMLSelectElement>("re-month");
+  sel.innerHTML = "";
+  for (const m of riskMonths) {
+    const o = document.createElement("option");
+    o.value = m.month;
+    o.textContent = m.month + (m.modified ? " · " + m.modified : "");
+    sel.appendChild(o);
+  }
+  sel.value = current;
+}
+
+async function loadRiskMonth(month: string) {
+  if (!month) return;
+  riskSetStatus("info", "正在载入 " + month + " …");
+  try {
+    const raw = await invoke<string>("read_risk_doc", { month });
+    riskDoc = JSON.parse(raw) as RiskDoc;
+    riskCurrentMonth = riskDoc.month || month;
+    riskDirty = false;
+    riskSourceEditable = false;
+    const src = byId<HTMLTextAreaElement>("re-source");
+    src.readOnly = true;
+    src.value = "";
+    byId("re-btn-source-edit").hidden = false;
+    byId("re-btn-open-dash").hidden = true;
+    riskFootStatus("");
+    renderRiskAll();
+    riskHideStatus();
+  } catch (e) {
+    riskSetStatus("err", "载入 " + month + " 失败: " + e);
+  }
+}
+
+async function openRiskEditor() {
+  byId("risk-modal").hidden = false;
+  riskSetStatus("info", "正在读取月份列表…");
+  try {
+    const m = await invoke<RiskMonths>("list_risk_months");
+    riskMonths = m.months;
+    if (m.months.length === 0) {
+      riskDoc = null;
+      riskSetStatus("err", "未找到风险文档:请先运行流水线生成看板(output\\dashboard\\risk_action_YYYYMM.md)");
+      return;
+    }
+    renderMonthSelect(m.current || m.months[0].month);
+    await loadRiskMonth(m.current || m.months[0].month);
+  } catch (e) {
+    riskSetStatus("err", "读取月份列表失败: " + e);
+  }
+}
+
+/** 关闭拦截:保存中禁止关闭;有未保存修改需 confirm */
+function tryCloseRiskEditor() {
+  if (riskSaving) {
+    showToast("正在保存,请稍候", "info");
+    return;
+  }
+  if (riskDirty && !window.confirm("有未保存的修改,确定关闭吗?修改将丢失。")) return;
+  byId("risk-modal").hidden = true;
+  riskDoc = null;
+  riskDirty = false;
+  destroyRiskSortables();
+  riskHideStatus();
+  riskFootStatus("");
+}
+
+// ── 长文本宽幅抽屉 ────────────────────────────────────
+function openDrawer(table: RiskTable, row: number, col: number, label: string) {
+  drawerCtx = { table, row, col };
+  const cell = table.rows[row]?.cells[col];
+  if (!cell) return;
+  byId("re-drawer-title").textContent =
+    label + " · 第 " + (row + 1) + " 行 · 「" + (table.columns[col] ?? "") + "」";
+  const list = byId("re-drawer-list");
+  list.innerHTML = "";
+  const parts = cell.text.length === 0 ? [""] : cell.text.split("｜");
+  parts.forEach((p) => addDrawerItem(p));
+  byId("re-drawer-mask").hidden = false;
+}
+function addDrawerItem(text: string) {
+  const list = byId("re-drawer-list");
+  const item = document.createElement("div");
+  item.className = "re-drawer-item";
+  const ta = document.createElement("textarea");
+  ta.rows = 2;
+  ta.value = text;
+  ta.addEventListener("input", () => {
+    ta.classList.toggle("invalid", ta.value.includes("\n"));
+  });
+  const rm = document.createElement("button");
+  rm.type = "button";
+  rm.className = "re-rm";
+  rm.title = "删除此条";
+  rm.textContent = "×";
+  rm.addEventListener("click", () => {
+    list.removeChild(item);
+  });
+  item.appendChild(ta);
+  item.appendChild(rm);
+  list.appendChild(item);
+  ta.focus();
+}
+function closeDrawer() {
+  byId("re-drawer-mask").hidden = true;
+  drawerCtx = null;
+}
+byId("re-drawer-add").addEventListener("click", () => addDrawerItem(""));
+byId("re-drawer-cancel").addEventListener("click", closeDrawer);
+byId("re-drawer-mask").addEventListener("click", (e) => {
+  if (e.target === byId("re-drawer-mask")) closeDrawer();
+});
+byId("re-drawer-save").addEventListener("click", () => {
+  if (!drawerCtx) return closeDrawer();
+  const tas = Array.from(byId("re-drawer-list").querySelectorAll("textarea"));
+  if (tas.some((ta) => ta.value.includes("\n"))) {
+    showToast("单条内容不能包含换行,请拆成多条", "err");
+    return;
+  }
+  const joined = tas.map((ta) => ta.value.trim()).join("｜");
+  const cell = drawerCtx.table.rows[drawerCtx.row]?.cells[drawerCtx.col];
+  if (cell) {
+    cell.text = joined;
+    markRiskDirty();
+    renderRiskAll();
+  }
+  closeDrawer();
+});
+
+// ── 保存前校验(必填/数值/日期;错误行标红+定位,阻断保存) ──
+function validateRiskDoc(): string[] {
+  const errs: string[] = [];
+  const tables: [string, RiskTable][] = [
+    ["风险表", riskDoc!.risk_table],
+    ["行动表", riskDoc!.action_table],
+  ];
+  document.querySelectorAll("#re-risk-table tr.re-row-err,#re-action-table tr.re-row-err").forEach((tr) => {
+    tr.classList.remove("re-row-err");
+  });
+  for (const [label, table] of tables) {
+    table.rows.forEach((row, ri) => {
+      table.columns.forEach((colName, ci) => {
+        const text = (row.cells[ci]?.text ?? "").trim();
+        if (RISK_REQ_COL.test(colName) && !text) {
+          errs.push(label + " 第 " + (ri + 1) + " 行「" + colName + "」:必填,不能为空");
+          markErrRow(label, ri);
+        } else if (text && RISK_DATE_COL.test(colName) && !RISK_DATE_VALUE.test(text)) {
+          errs.push(label + " 第 " + (ri + 1) + " 行「" + colName + "」:应为日期(YYYY-MM-DD),当前「" + text + "」");
+          markErrRow(label, ri);
+        } else if (text && RISK_NUM_COL.test(colName) && !RISK_NUM_VALUE.test(text)) {
+          errs.push(label + " 第 " + (ri + 1) + " 行「" + colName + "」:应为数值,当前「" + text + "」");
+          markErrRow(label, ri);
+        }
+      });
+    });
+  }
+  return errs;
+}
+function markErrRow(label: string, ri: number) {
+  const container = byId(label === "风险表" ? "re-risk-table" : "re-action-table");
+  const tr = container.querySelector('tr[data-ri="' + ri + '"]');
+  if (tr) tr.classList.add("re-row-err");
+}
+
+function setRiskSavingUi(saving: boolean) {
+  byId<HTMLButtonElement>("re-btn-save").disabled = saving;
+  byId<HTMLButtonElement>("re-btn-reload").disabled = saving;
+  byId<HTMLButtonElement>("re-btn-source").disabled = saving;
+  byId<HTMLButtonElement>("re-btn-close").disabled = saving;
+  byId<HTMLSelectElement>("re-month").disabled = saving;
+}
+
+async function saveRiskDoc() {
+  if (!riskDoc || riskSaving) return;
+  let payload: string;
+  const inSourceMode = !byId("re-source-body").hidden;
+  if (inSourceMode && riskSourceEditable) {
+    // 源码模式已解锁:格式风险自负,直接以源码内容写入
+    const srcText = byId<HTMLTextAreaElement>("re-source").value;
+    try {
+      JSON.parse(srcText);
+      payload = srcText;
+    } catch (e) {
+      riskSetStatus("err", "源码不是合法 JSON,未保存: " + e);
+      return;
+    }
+  } else {
+    const errs = validateRiskDoc();
+    if (errs.length > 0) {
+      riskSetStatus("err", "校验未通过(" + errs.length + " 处),已标红定位:\n" + errs.slice(0, 8).join("\n"));
+      const firstErr = byId("re-risk-table").querySelector("tr.re-row-err") ?? byId("re-action-table").querySelector("tr.re-row-err");
+      firstErr?.scrollIntoView({ block: "center" });
+      showToast("校验未通过,请修正标红行", "err");
+      return;
+    }
+    payload = JSON.stringify(riskDoc);
+  }
+  riskSaving = true;
+  setRiskSavingUi(true);
+  riskFootStatus("保存中:写入文档并重新渲染看板,请稍候(约 1 分钟内)…");
+  try {
+    const r = await invoke<RiskWriteResult>("write_risk_doc", { month: riskCurrentMonth, payload });
+    riskDirty = false;
+    if (r.render_ok) {
+      riskSetStatus("ok", "已保存,看板重渲染完成");
+      byId("re-btn-open-dash").hidden = false;
+      showToast("已保存并重渲染完成", "ok");
+      riskFootStatus("");
+      await loadRiskMonth(riskCurrentMonth);
+      riskSetStatus("ok", "已保存,看板重渲染完成");
+    } else {
+      riskSetStatus("err", "内容已保存,但看板重渲染失败。重渲染日志尾部:\n" + r.log_tail);
+      riskFootStatus("内容已保存,重渲染失败");
+      showToast("内容已保存,重渲染失败", "err");
+    }
+  } catch (e) {
+    const msg = String(e);
+    let text = "保存失败: " + msg;
+    // mtime 并发冲突:文件被其它进程改过,须重新载入
+    if (/mtime|已被修改|修改时间|conflict/i.test(msg)) {
+      text += "\n文件已被修改,请重新打开后再编辑(点击下方「重新载入」)。";
+    }
+    riskSetStatus("err", text);
+    riskFootStatus("保存失败");
+    showToast("保存失败", "err");
+  } finally {
+    riskSaving = false;
+    setRiskSavingUi(false);
+  }
+}
+
+// ── 编辑器事件绑定 ────────────────────────────────────
+byId("btn-edit-risk").addEventListener("click", openRiskEditor);
+byId("re-btn-close").addEventListener("click", tryCloseRiskEditor);
+byId("risk-modal").addEventListener("click", (e) => {
+  if (e.target === byId("risk-modal")) tryCloseRiskEditor();
+});
+byId("re-btn-save").addEventListener("click", () => void saveRiskDoc());
+byId("re-btn-reload").addEventListener("click", async () => {
+  if (riskSaving) return;
+  if (riskDirty && !window.confirm("有未保存的修改,重新载入将丢失,继续吗?")) return;
+  await loadRiskMonth(riskCurrentMonth);
+});
+byId("re-btn-open-dash").addEventListener("click", async () => {
+  try {
+    const p = await invoke<string>("open_dashboard");
+    appendLog("ok", "已打开看板: " + p);
+  } catch (e) {
+    appendLog("error", "打开看板失败: " + e);
+    showToast("打开看板失败: " + e, "err");
+  }
+});
+byId<HTMLSelectElement>("re-month").addEventListener("change", async (e) => {
+  if (riskSaving) return;
+  const month = (e.target as HTMLSelectElement).value;
+  if (month === riskCurrentMonth) return;
+  if (riskDirty && !window.confirm("有未保存的修改,切换月份将丢失,继续吗?")) {
+    (e.target as HTMLSelectElement).value = riskCurrentMonth;
+    return;
+  }
+  await loadRiskMonth(month);
+});
+byId("re-kpi-add").addEventListener("click", () => {
+  if (!riskDoc) return;
+  riskDoc.kpi_cards.push({
+    title: "新卡片",
+    value: "",
+    sub: "",
+    level: "none",
+    source: "custom",
+    derived_value: "",
+    stale: false,
+  });
+  markRiskDirty();
+  renderKpiSection();
+});
+byId<HTMLTextAreaElement>("re-notes").addEventListener("input", (e) => {
+  if (!riskDoc) return;
+  riskDoc.notes_section = (e.target as HTMLTextAreaElement).value;
+  markRiskDirty();
+});
+// 源码模式:默认只读展示;解锁编辑需二次确认(格式风险自负)
+byId("re-btn-source").addEventListener("click", () => {
+  if (!riskDoc) return;
+  const sourceBody = byId("re-source-body");
+  const formBody = byId("re-form-body");
+  if (sourceBody.hidden) {
+    byId<HTMLTextAreaElement>("re-source").value = JSON.stringify(riskDoc, null, 2);
+    sourceBody.hidden = false;
+    formBody.hidden = true;
+    byId("re-btn-source").textContent = "表单模式";
+  } else {
+    sourceBody.hidden = true;
+    formBody.hidden = false;
+    byId("re-btn-source").textContent = "源码模式";
+  }
+});
+byId("re-btn-source-edit").addEventListener("click", () => {
+  if (!window.confirm("直接编辑源码可能破坏格式,风险自负,仍要继续吗?")) return;
+  riskSourceEditable = true;
+  byId<HTMLTextAreaElement>("re-source").readOnly = false;
+  byId("re-btn-source-edit").hidden = true;
 });
 
 // ── 启动流程 ──────────────────────────────────────────

@@ -137,6 +137,7 @@
           <button id="btn-run" class="btn primary big"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg> 生成看板</button>
           <button id="btn-stop" class="btn danger big" disabled><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2" ry="2"/></svg> 停止</button>
           <button id="btn-sync" class="btn big" title="从共享盘获取最新看板程序"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> 更新代码</button>
+          <button id="btn-edit-risk" class="btn big" title="编辑 R 面「风险与行动」文档(保存后自动重渲染看板)"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg> 编辑风险文档</button>
         </div>
         <div class="actions-group results-group">
           <button id="btn-open-dashboard" class="btn" disabled><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg> 打开看板</button>
@@ -217,6 +218,88 @@
           <li data-step="3"><span class="dot"></span>自动重启</li>
         </ol>
         <p class="update-note">请勿关闭电脑，完成后应用将自动重新打开</p>
+      </div>
+    </div>
+
+    <!-- 风险文档编辑器(0.3.26):月份选择 + 只读头/KPI卡/风险表/行动表/备注/只读口径 + 保存链路 + 源码模式 -->
+    <div class="modal-mask" id="risk-modal" hidden>
+      <div class="modal risk-editor">
+        <div class="re-head">
+          <h3>编辑风险文档</h3>
+          <select id="re-month" class="re-month" title="选择要编辑的月份"></select>
+          <span class="re-meta" id="re-meta"></span>
+          <div class="re-head-actions">
+            <button id="re-btn-source" class="mini-btn" title="切换源码模式(JSON 展示,默认只读)">源码模式</button>
+            <button id="re-btn-close" class="mini-btn" title="关闭">关闭</button>
+          </div>
+        </div>
+        <div class="re-status" id="re-status" hidden></div>
+        <div class="re-body" id="re-form-body">
+          <!-- 头部元信息(只读,灰底) -->
+          <div class="re-section re-readonly">
+            <div class="re-sec-title">头部信息(只读,跑批生成)</div>
+            <pre id="re-header" class="re-raw"></pre>
+          </div>
+          <!-- KPI 卡区 -->
+          <div class="re-section">
+            <div class="re-sec-title">
+              <span>KPI 卡片</span>
+              <button id="re-kpi-add" class="mini-btn" title="新增自定义卡片">新增卡片</button>
+            </div>
+            <div id="re-kpi-list"></div>
+            <div class="re-sec-title re-sub">布局预览(每行最多 8 张,等宽铺满)</div>
+            <div id="re-kpi-preview" class="re-kpi-preview"></div>
+          </div>
+          <!-- 当月风险摘要 -->
+          <div class="re-section">
+            <div class="re-sec-title"><span>当月风险摘要</span></div>
+            <div id="re-risk-table" class="re-table-wrap"></div>
+          </div>
+          <!-- 行动清单 -->
+          <div class="re-section">
+            <div class="re-sec-title"><span>行动清单</span></div>
+            <div id="re-action-table" class="re-table-wrap"></div>
+          </div>
+          <!-- 备注自由段 -->
+          <div class="re-section">
+            <div class="re-sec-title"><span>备注</span></div>
+            <textarea id="re-notes" class="re-notes" rows="4" placeholder="自由段落,将写入「备注」小节"></textarea>
+          </div>
+          <!-- 口径区(只读锁定) -->
+          <div class="re-section re-readonly">
+            <div class="re-sec-title">口径说明(勿改)</div>
+            <pre id="re-caliber" class="re-raw"></pre>
+          </div>
+        </div>
+        <div class="re-body" id="re-source-body" hidden>
+          <div class="re-section" style="flex:1;display:flex;flex-direction:column;min-height:0">
+            <div class="re-sec-title">
+              <span>源码视图(JSON 协议)</span>
+              <button id="re-btn-source-edit" class="mini-btn" title="解锁编辑(格式风险自负)">解锁编辑</button>
+            </div>
+            <textarea id="re-source" class="re-source" spellcheck="false" readonly></textarea>
+          </div>
+        </div>
+        <div class="re-foot">
+          <span class="re-foot-status" id="re-foot-status"></span>
+          <button id="re-btn-open-dash" class="btn" hidden>打开看板</button>
+          <button id="re-btn-reload" class="btn ghost">重新载入</button>
+          <button id="re-btn-save" class="btn primary">保存并重渲染</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 长文本单元格宽幅编辑抽屉:多条建议按全角｜拆行逐条编辑,保存回拼 -->
+    <div class="modal-mask" id="re-drawer-mask" hidden>
+      <div class="modal re-drawer">
+        <h3 id="re-drawer-title">编辑内容</h3>
+        <div class="re-drawer-tip">多条内容按全角 ｜ 分隔,此处逐条编辑,保存时自动回拼;单条内不支持换行</div>
+        <div id="re-drawer-list" class="re-drawer-list"></div>
+        <div class="modal-actions">
+          <button id="re-drawer-add" class="btn ghost">添加一条</button>
+          <button id="re-drawer-cancel" class="btn ghost">取消</button>
+          <button id="re-drawer-save" class="btn primary">保存</button>
+        </div>
       </div>
     </div>
 

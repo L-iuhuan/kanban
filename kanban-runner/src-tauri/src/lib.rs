@@ -929,6 +929,236 @@ async fn open_folder(kind: String) -> Result<String, String> {
     Ok(dir.display().to_string())
 }
 
+// ── 风险文档编辑(0.3.26,R 面「风险与行动」编辑功能) ────
+/// 写回结果:保存(--import-json)成功后自动串跑 --dashboard-only 重渲染,
+/// render_ok / log_tail 为重渲染阶段状态(复用跑批 spawn 路径,不过完整状态机)
+#[derive(Serialize, Clone)]
+struct RiskWriteResult {
+    render_ok: bool,
+    log_tail: String,
+}
+
+#[derive(Serialize, Clone)]
+struct RiskMonthInfo {
+    month: String,
+    /// 文件修改时间(展示用,格式 YYYY-MM-DD HH:MM)
+    modified: String,
+}
+
+#[derive(Serialize, Clone)]
+struct RiskMonths {
+    months: Vec<RiskMonthInfo>,
+    /// 当前数据月(最新 md 的月份;无文件时为空串,前端兜底)
+    current: String,
+}
+
+/// 月份格式校验(防路径穿越):仅允许 6 位数字 YYYYMM
+fn valid_month(month: &str) -> bool {
+    month.len() == 6 && month.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// 风险文档子进程 spawn 的公共构造:便携 python 路径 + 代码根目录 + UTF-8 环境,
+/// 与跑批 run_pipeline 同款解析(venv_python / data_root\code / no_window)
+fn risk_doc_cmd(args: &[&str]) -> Result<Command, String> {
+    let python = venv_python();
+    if !python.exists() {
+        return Err("运行环境未就绪(缺少 Python),请先完成环境安装".into());
+    }
+    let code_dir = data_root().join("code");
+    if !code_dir.join("dashboard").join("generate_risk_face.py").exists() {
+        return Err(
+            "本地代码尚未同步或版本过旧(缺少 dashboard\\generate_risk_face.py),请先「更新代码」"
+                .into(),
+        );
+    }
+    let mut cmd = Command::new(&python);
+    cmd.current_dir(&code_dir)
+        .args(args)
+        .env("PYTHONUNBUFFERED", "1")
+        .env("PYTHONIOENCODING", "utf-8");
+    no_window(&mut cmd);
+    Ok(cmd)
+}
+
+/// 看门狗:超时后 taskkill 强杀整个进程树;对已退出的进程无害(部署面向 Windows)
+fn arm_watchdog(pid: u32, timeout: std::time::Duration) {
+    std::thread::spawn(move || {
+        std::thread::sleep(timeout);
+        #[cfg(windows)]
+        {
+            let mut c = Command::new("taskkill");
+            c.args(["/PID", &pid.to_string(), "/T", "/F"]);
+            no_window(&mut c);
+            let _ = c.output();
+        }
+        #[cfg(not(windows))]
+        let _ = pid;
+    });
+}
+
+/// 非零退出时的错误提取:优先解析 stdout 的 JSON error envelope {"ok":false,"err","stage"},
+/// 否则取 stderr 尾部(UTF-8 容错),都拿不到时用退出码兜底;中文错误原样透传
+fn risk_err_envelope(out: &std::process::Output) -> String {
+    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+        if v.get("ok").and_then(|b| b.as_bool()) == Some(false) {
+            let err = v.get("err").and_then(|s| s.as_str()).unwrap_or("未知错误");
+            let stage = v.get("stage").and_then(|s| s.as_str()).unwrap_or("");
+            return if stage.is_empty() {
+                err.to_string()
+            } else {
+                format!("{err}(阶段: {stage})")
+            };
+        }
+    }
+    let stderr_tail = String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .last()
+        .unwrap_or("")
+        .to_string();
+    if !stderr_tail.is_empty() {
+        return stderr_tail;
+    }
+    let code = out
+        .status
+        .code()
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "未知".into());
+    format!("执行失败(退出码 {code})")
+}
+
+/// 读取风险文档:spawn `python dashboard\generate_risk_face.py --export-json <month>`,
+/// stdout 按 UTF-8 字节读 JSON 返回(透传给前端解析);超时 60 秒
+#[tauri::command]
+async fn read_risk_doc(month: String) -> Result<String, String> {
+    if !valid_month(&month) {
+        return Err("月份格式不正确(应为 YYYYMM)".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut cmd = risk_doc_cmd(&[
+            "dashboard\\generate_risk_face.py",
+            "--export-json",
+            &month,
+        ])?;
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = cmd.spawn().map_err(|e| format!("启动导出失败: {e}"))?;
+        arm_watchdog(child.id(), std::time::Duration::from_secs(60));
+        let out = child
+            .wait_with_output()
+            .map_err(|e| format!("等待导出完成失败: {e}"))?;
+        if out.status.success() {
+            String::from_utf8(out.stdout).map_err(|_| "导出结果不是有效的 UTF-8 文本".to_string())
+        } else {
+            Err(risk_err_envelope(&out))
+        }
+    })
+    .await
+    .map_err(|e| format!("读取风险文档任务异常: {e}"))?
+}
+
+/// 写回风险文档:spawn `--import-json <month>`,payload 经 stdin 管道按 UTF-8 字节写入
+/// (规避 Windows 命令行 32K 上限);成功后自动串跑 `python run_chain.py --dashboard-only`
+/// 重渲染(整体超时 120 秒,含重渲染),返回 {render_ok, log_tail}
+#[tauri::command]
+async fn write_risk_doc(month: String, payload: String) -> Result<RiskWriteResult, String> {
+    if !valid_month(&month) {
+        return Err("月份格式不正确(应为 YYYYMM)".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let deadline = std::time::Instant::now();
+        let budget = std::time::Duration::from_secs(120);
+        // 1. import-json 写回
+        let mut cmd = risk_doc_cmd(&[
+            "dashboard\\generate_risk_face.py",
+            "--import-json",
+            &month,
+        ])?;
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = cmd.spawn().map_err(|e| format!("启动写入失败: {e}"))?;
+        arm_watchdog(child.id(), budget);
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = stdin.write_all(payload.as_bytes());
+            // stdin 随 drop 关闭,python 读到 EOF 才开始处理
+        }
+        let out = child
+            .wait_with_output()
+            .map_err(|e| format!("等待写入完成失败: {e}"))?;
+        if !out.status.success() {
+            return Err(risk_err_envelope(&out));
+        }
+        // 2. 串跑重渲染:复用跑批同款 spawn 路径,只等待完成并采集尾部日志
+        let remaining = budget.saturating_sub(deadline.elapsed());
+        let mut cmd2 = risk_doc_cmd(&["run_chain.py", "--dashboard-only"])?;
+        cmd2.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child2 = cmd2
+            .spawn()
+            .map_err(|e| format!("内容已保存,但启动看板重渲染失败: {e}"))?;
+        arm_watchdog(child2.id(), remaining.max(std::time::Duration::from_secs(10)));
+        let out2 = child2
+            .wait_with_output()
+            .map_err(|e| format!("内容已保存,等待重渲染完成失败: {e}"))?;
+        let render_ok = out2.status.success();
+        let stdout_text = String::from_utf8_lossy(&out2.stdout).into_owned();
+        let stderr_text = String::from_utf8_lossy(&out2.stderr).into_owned();
+        // 日志尾部:stdout+stderr 合流取最后 40 行(重渲染失败时方便定位)
+        let mut lines: Vec<&str> = stdout_text
+            .lines()
+            .chain(stderr_text.lines())
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        let keep = lines.len().saturating_sub(40);
+        lines.drain(..keep);
+        Ok(RiskWriteResult {
+            render_ok,
+            log_tail: lines.join("\n"),
+        })
+    })
+    .await
+    .map_err(|e| format!("写入风险文档任务异常: {e}"))?
+}
+
+/// 扫描本地 output\dashboard\risk_action_*.md,提取月份列表(含修改时间,新在前)+当前数据月
+#[tauri::command]
+async fn list_risk_months() -> Result<RiskMonths, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = data_root().join("code").join("output").join("dashboard");
+        let mut months: Vec<RiskMonthInfo> = Vec::new();
+        if let Ok(rd) = fs::read_dir(&dir) {
+            for entry in rd.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let Some(m) = name
+                    .strip_prefix("risk_action_")
+                    .and_then(|s| s.strip_suffix(".md"))
+                else {
+                    continue;
+                };
+                if !valid_month(m) {
+                    continue;
+                }
+                let modified = entry
+                    .metadata()
+                    .and_then(|md| md.modified())
+                    .map(format_mtime)
+                    .unwrap_or_default();
+                months.push(RiskMonthInfo {
+                    month: m.to_string(),
+                    modified,
+                });
+            }
+        }
+        months.sort_by(|a, b| b.month.cmp(&a.month));
+        let current = months.first().map(|m| m.month.clone()).unwrap_or_default();
+        Ok(RiskMonths { months, current })
+    })
+    .await
+    .map_err(|e| format!("扫描风险文档任务异常: {e}"))?
+}
+
 // ── 环境自举 ──────────────────────────────────────────
 /// 检测系统 Python → 创建 .venv → 安装 requirements(全部流式日志)
 /// 文件级并发守卫：同一时刻只允许一个环境安装流程
@@ -1560,7 +1790,10 @@ pub fn run() {
             setup_env,
             health_check,
             self_update,
-            take_update_result
+            take_update_result,
+            read_risk_doc,
+            write_risk_doc,
+            list_risk_months
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
