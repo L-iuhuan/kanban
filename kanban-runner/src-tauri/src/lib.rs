@@ -1815,3 +1815,207 @@ pub fn run() {
             }
         });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── valid_month:月份格式校验(防路径穿越) ─────────────
+    #[test]
+    fn valid_month_accepts_normal() {
+        assert!(valid_month("202601"));
+        assert!(valid_month("199912"));
+        assert!(valid_month("202610"));
+    }
+
+    #[test]
+    fn valid_month_rejects_wrong_length() {
+        assert!(!valid_month(""));
+        assert!(!valid_month("20261"));
+        assert!(!valid_month("2026011"));
+    }
+
+    #[test]
+    fn valid_month_is_format_only() {
+        // 实现只校验「6 位数字」格式(防路径穿越),不做 01-12 月份范围校验——
+        // 越界月份由 generate_risk_face.py 侧处理。锁定当前行为,防误改。
+        assert!(valid_month("202613"));
+        assert!(valid_month("202600"));
+    }
+
+    #[test]
+    fn valid_month_rejects_non_digits() {
+        assert!(!valid_month("20260a"));
+        assert!(!valid_month("abcdef"));
+        assert!(!valid_month("2026 1"));
+        assert!(!valid_month("2026-1"));
+    }
+
+    #[test]
+    fn valid_month_rejects_path_traversal() {
+        // 路径穿越尝试必须全部被拒
+        assert!(!valid_month("../etc"));
+        assert!(!valid_month("..\\.."));
+        assert!(!valid_month("20260/"));
+    }
+
+    // ── version_newer:朴素 semver 比较 ───────────────────
+    #[test]
+    fn version_newer_basic() {
+        assert!(version_newer("0.3.27", "0.3.26"));
+        assert!(!version_newer("0.3.26", "0.3.27"));
+        assert!(!version_newer("0.3.26", "0.3.26"));
+    }
+
+    #[test]
+    fn version_newer_v_prefix() {
+        assert!(version_newer("v0.3.27", "0.3.26"));
+        assert!(version_newer("V1.0.0", "v0.9.9"));
+    }
+
+    #[test]
+    fn version_newer_segment_lengths() {
+        assert!(version_newer("0.3.26.1", "0.3.26"));
+        assert!(!version_newer("0.3", "0.3.26"));
+        assert!(version_newer("1.0", "0.3.26"));
+    }
+
+    #[test]
+    fn version_newer_dirty_segments_fallback_zero() {
+        // 非数字段按 0 解析,不得 panic
+        assert!(version_newer("0.3.abc", "0.2.9"));
+        // "x" → [0], 比 0.0.1 旧
+        assert!(!version_newer("x", "0.0.1"));
+    }
+
+    // ── parse_stage:[STAGE n/total] 阶段标记解析 ─────────
+    #[test]
+    fn parse_stage_with_name() {
+        let s = parse_stage("[STAGE 2/5] 客户分析").unwrap();
+        assert_eq!((s.n, s.total, s.name.as_str()), (2, 5, "客户分析"));
+    }
+
+    #[test]
+    fn parse_stage_without_name() {
+        let s = parse_stage("[STAGE 3/5]").unwrap();
+        assert_eq!((s.n, s.total, s.name.as_str()), (3, 5, ""));
+    }
+
+    #[test]
+    fn parse_stage_with_surrounding_noise() {
+        // 日志行可能带前后空白/其他内容
+        let s = parse_stage("  [STAGE 1/7] 数据清洗  ").unwrap();
+        assert_eq!((s.n, s.total), (1, 7));
+        assert_eq!(s.name, "数据清洗");
+    }
+
+    #[test]
+    fn parse_stage_rejects_garbage() {
+        assert!(parse_stage("").is_none());
+        assert!(parse_stage("普通日志行").is_none());
+        assert!(parse_stage("[STAGE a/b]").is_none());
+        assert!(parse_stage("[STAGE 2/5").is_none()); // 缺右括号
+        assert!(parse_stage("[STAGE]").is_none());
+    }
+
+    // ── parse_python_version:"Python 3.x.y" 输出解析 ──────
+    #[test]
+    fn parse_python_version_normal() {
+        assert_eq!(parse_python_version("Python 3.11.5"), Some((3, 11)));
+        assert_eq!(parse_python_version("Python 3.10"), Some((3, 10)));
+    }
+
+    #[test]
+    fn parse_python_version_stderr_style() {
+        // python --version 在新版本走 stdout,老版本/某些发行版走 stderr,格式相同
+        assert_eq!(parse_python_version("Python 2.7.18"), Some((2, 7)));
+    }
+
+    #[test]
+    fn parse_python_version_rejects() {
+        assert_eq!(parse_python_version(""), None);
+        assert_eq!(parse_python_version("python 3.11"), None); // 大小写敏感,前缀必须大写
+        assert_eq!(parse_python_version("3.11"), None);
+        assert_eq!(parse_python_version("Python abc"), None);
+    }
+
+    // ── utc_civil:UNIX 秒 → UTC 年月日时分(Howard Hinnant) ──
+    #[test]
+    fn utc_civil_epoch() {
+        assert_eq!(utc_civil(0), (1970, 1, 1, 0, 0));
+    }
+
+    #[test]
+    fn utc_civil_known_dates() {
+        // 2026-01-01 00:00 UTC = 1767225600
+        let secs: i64 = 1_767_225_600;
+        assert_eq!(utc_civil(secs), (2026, 1, 1, 0, 0));
+        // 2024-02-29(闰日)12:34 UTC = 1709210040
+        let secs: i64 = 1_709_210_040;
+        assert_eq!(utc_civil(secs), (2024, 2, 29, 12, 34));
+    }
+
+    #[test]
+    fn utc_civil_negative_secs_before_epoch() {
+        // 1969-12-31 23:00 UTC
+        assert_eq!(utc_civil(-3600), (1969, 12, 31, 23, 0));
+    }
+
+    // ── risk_err_envelope:错误提取优先级 ─────────────────
+    #[cfg(windows)]
+    fn fake_output(code: u32, stdout: &str, stderr: &str) -> std::process::Output {
+        use std::os::windows::process::ExitStatusExt;
+        std::process::Output {
+            status: std::process::ExitStatus::from_raw(code),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn fake_output(code: u32, stdout: &str, stderr: &str) -> std::process::Output {
+        std::process::Output {
+            status: std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("exit {code}"))
+                .output()
+                .unwrap()
+                .status,
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    fn risk_err_envelope_parses_json() {
+        let out = fake_output(1, r#"{"ok":false,"err":"导出失败","stage":"读取"}"#, "");
+        assert_eq!(risk_err_envelope(&out), "导出失败(阶段: 读取)");
+    }
+
+    #[test]
+    fn risk_err_envelope_json_no_stage() {
+        let out = fake_output(1, r#"{"ok":false,"err":"只有错误"}"#, "");
+        assert_eq!(risk_err_envelope(&out), "只有错误");
+    }
+
+    #[test]
+    fn risk_err_envelope_falls_back_to_stderr_tail() {
+        // stdout 不是 JSON 时取 stderr 最后一行非空内容
+        let out = fake_output(1, "not json", "Traceback...\n  File x\n真正的错误信息\n\n");
+        assert_eq!(risk_err_envelope(&out), "真正的错误信息");
+    }
+
+    #[test]
+    fn risk_err_envelope_falls_back_to_exit_code() {
+        // stdout/stderr 都拿不到内容时用退出码兜底
+        let out = fake_output(3, "", "");
+        assert_eq!(risk_err_envelope(&out), "执行失败(退出码 3)");
+    }
+
+    #[test]
+    fn risk_err_envelope_ignores_ok_true_json() {
+        // ok=true 的 envelope 不算错误,继续回落
+        let out = fake_output(1, r#"{"ok":true}"#, "stderr 内容");
+        assert_eq!(risk_err_envelope(&out), "stderr 内容");
+    }
+}
